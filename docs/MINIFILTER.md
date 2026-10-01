@@ -1,6 +1,6 @@
 # DeleteGuard minifilter design
 
-DeleteGuard v0.2 adds a Windows file-system minifilter to close the temporary ACL-release race in v0.1. v0.2.1 adds the denied-event/interactive approval pipeline. v0.2.2 adds a guarded loaded-driver validation harness for disposable Windows test VMs.
+DeleteGuard v0.2 adds a Windows file-system minifilter to close the temporary ACL-release race in v0.1. v0.2.1 adds the denied-event/interactive approval pipeline. v0.2.2 adds a guarded loaded-driver validation harness for disposable Windows test VMs. v0.2.4 hardens delete grants against Windows PID reuse.
 
 ## Enforcement path
 
@@ -33,7 +33,7 @@ Approved Broker path:
 
 ```text
 sync protected NT paths
--> grant {broker PID, target path, <=30s TTL}
+-> grant {broker PID + process-start identity, target path, <=30s TTL}
 -> temporarily remove v0.1 DELETE ACL
 -> perform deletion
 -> revoke grant
@@ -72,10 +72,15 @@ The prototype stores up to 64 active roots. A path matches a root only when it i
 
 A grant contains:
 
-- broker process ID
-- normalized NT target path
-- expiry timestamp
-- maximum TTL of 30 seconds
+- broker process ID;
+- the broker process start key resolved by the driver with `PsLookupProcessByProcessId` + `PsGetProcessStartKey`;
+- normalized NT target path;
+- expiry timestamp;
+- maximum TTL of 30 seconds.
+
+For every protected delete request, the filter obtains the actual I/O requestor with `FltGetRequestorProcessId` and `FltGetRequestorProcess`, then requires both PID and process start key to match the grant. This prevents a different process from inheriting a still-live grant if Windows reuses the Broker's PID after an abnormal Broker termination.
+
+The driver does not retain a long-lived `EPROCESS` reference for the grant. It references the process only while resolving the grant identity, reads the start key, and immediately dereferences the object.
 
 A grant covers the target and descendants so one elevated recursive delete can remove a tree. The broker normally requests 15 seconds and explicitly revokes the grant in `finally` after the operation.
 
@@ -89,6 +94,8 @@ Protocol v3 distinguishes two connection roles:
 
 - **Command**: privileged Broker/Relay policy synchronization (`ping`, reset/add/remove roots, grant, revoke).
 - **Event**: LocalSystem Event Relay receives delete-denied notifications.
+
+The process start key is internal kernel grant state, so the user-mode command ABI does not change and protocol v3 remains valid.
 
 The Agent never receives kernel command access. The Relay persists a bounded read-only denial history under `%ProgramData%\DeleteGuard` for the Agent.
 
