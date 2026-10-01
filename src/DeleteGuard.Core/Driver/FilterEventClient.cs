@@ -75,7 +75,9 @@ public sealed class FilterEventClient : IDisposable
                     $"DeleteGuard event protocol mismatch. Driver={driverEvent.Version}, client={DriverProtocol.Version}.");
             }
 
-            if (driverEvent.Type is not DriverEventType.DeleteDenied and not DriverEventType.RenameDenied)
+            if (driverEvent.Type is not DriverEventType.DeleteDenied
+                and not DriverEventType.RenameDenied
+                and not DriverEventType.HardLinkDenied)
             {
                 throw new InvalidOperationException($"Unsupported DeleteGuard event type: {driverEvent.Type}.");
             }
