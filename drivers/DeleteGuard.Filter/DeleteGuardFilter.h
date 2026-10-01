@@ -31,7 +31,8 @@ typedef enum _DG_DELETE_OPERATION {
     DgDeleteOperationDisposition = 1,
     DgDeleteOperationDeleteOnClose = 2,
     DgDeleteOperationMoveOut = 3,
-    DgDeleteOperationReplaceProtectedDestination = 4
+    DgDeleteOperationReplaceProtectedDestination = 4,
+    DgDeleteOperationRenameProtectedAncestor = 5
 } DG_DELETE_OPERATION;
 
 typedef struct _DG_CONNECT_CONTEXT {
