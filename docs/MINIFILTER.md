@@ -1,6 +1,6 @@
 # DeleteGuard minifilter design
 
-DeleteGuard v0.2 adds a Windows file-system minifilter to close the temporary ACL-release race in v0.1. v0.2.1 adds the denied-event/interactive approval pipeline. v0.2.2 adds a guarded loaded-driver validation harness for disposable Windows test VMs. v0.2.4 hardens delete grants against Windows PID reuse.
+DeleteGuard v0.2 adds a Windows file-system minifilter to close the temporary ACL-release race in v0.1. v0.2.1 adds denied-event/interactive approval, v0.2.2 adds guarded disposable-VM validation, v0.2.4 binds delete grants to process start identity, and v0.2.5 gates destructive namespace escape.
 
 ## Enforcement path
 
@@ -13,7 +13,7 @@ Explorer / cmd / PowerShell / Python / Win32 API
                          v
               DeleteGuardFilter.sys
                /               \
-     protected + no grant     not protected
+     protected + denied       allowed
              |                    |
       STATUS_ACCESS_DENIED        v
              |             normal NTFS processing
@@ -22,126 +22,157 @@ Explorer / cmd / PowerShell / Python / Win32 API
              |
    LocalSystem Event Relay
              |
-      desktop Agent prompt
-             |
-       Yes -> Windows UAC
-             |
-      DeleteGuard.Broker
+        desktop Agent
 ```
 
-Approved Broker path:
+Approved delete path:
 
 ```text
-sync protected NT paths
--> grant {broker PID + process-start identity, target path, <=30s TTL}
--> temporarily remove v0.1 DELETE ACL
--> perform deletion
--> revoke grant
--> re-sync policies / restore ACL when appropriate
+Agent/CLI -> Windows UAC -> DeleteGuard.Broker
+                           |
+                           +-> sync protected NT paths
+                           +-> grant {Broker PID + process-start key, target path, <=30s TTL}
+                           +-> temporarily relax v0.1 DELETE ACL
+                           +-> perform approved deletion
+                           +-> revoke grant
+                           +-> re-sync policy / restore ACL
 ```
 
-The ACL layer remains present as a fallback. If the driver is unavailable, v0.1 behavior remains active. If the driver is present but rejects a sync or grant command, the broker fails closed and does not relax the ACL.
+The ACL layer remains a fallback. If the driver is unavailable, v0.1 behavior remains active. If the driver is present but rejects sync or grant creation, the Broker fails closed before relaxing the ACL.
 
 ## Operations intercepted
 
-The kernel gate currently handles:
+### Destructive deletion
 
 - `IRP_MJ_SET_INFORMATION` + `FileDispositionInformation`
 - `IRP_MJ_SET_INFORMATION` + `FileDispositionInformationEx`
 - `IRP_MJ_CREATE` with `FILE_DELETE_ON_CLOSE`
 
-The filter attaches to NTFS only, matching the v0.1 support boundary. Destructive rename/move-out enforcement remains future work.
+### Namespace mutation
+
+- `FileRenameInformation`
+- `FileRenameInformationBypassAccessCheck`
+- `FileRenameInformationEx`
+- `FileRenameInformationExBypassAccessCheck`
+
+For rename/move operations:
+
+- a protected source may remain inside its existing protecting root;
+- a protected source moving outside that root is denied;
+- rename-with-replace is denied when its destination is protected;
+- if a protected-source destination cannot be safely resolved, the operation fails closed;
+- delete grants do not authorize namespace mutation.
+
+This specifically protects unrelated files during the Broker's temporary ACL-relaxation window.
+
+The filter attaches to NTFS only, matching the ACL support boundary.
+
+## Safe capture of set-information buffers
+
+`SetFileInformation.InfoBuffer` is treated as untrusted when the request originates in user mode.
+
+For disposition operations, the minifilter probes when required and copies the fixed-size input into a kernel-local structure before checking the delete flag.
+
+Rename operations use a two-stage capture:
+
+1. safely inspect/copy the fixed header fields (`RootDirectory`, flags, filename length);
+2. validate the variable filename length, allocate nonpaged kernel memory, then probe/copy the filename into that stable buffer.
+
+Destination resolution uses only the captured kernel copy. Structured exception handling protects the probe/copy boundary. This prevents direct bad-pointer dereferences and prevents user mode from changing rename metadata between validation and use.
 
 ## Protected roots
 
-The broker converts Win32 paths such as:
+The Broker converts Win32 paths such as:
 
 ```text
 D:\Projects\Important
 ```
 
-to the device-path form observed by Filter Manager:
+to normalized device-path form observed by Filter Manager:
 
 ```text
 \Device\HarddiskVolumeX\Projects\Important
 ```
 
-The prototype stores up to 64 active roots. A path matches a root only when it is the same path or a true descendant boundary, not merely a string prefix.
+The prototype stores up to 64 active roots. A path matches a root only when it is the same path or a true descendant boundary, not a raw string prefix.
 
-## Scoped grants
+## Scoped delete grants
 
 A grant contains:
 
-- broker process ID;
-- the broker process start key resolved by the driver with `PsLookupProcessByProcessId` + `PsGetProcessStartKey`;
+- Broker process ID;
+- Broker process start key resolved by the driver with `PsLookupProcessByProcessId` + `PsGetProcessStartKey`;
 - normalized NT target path;
 - expiry timestamp;
 - maximum TTL of 30 seconds.
 
-For every protected delete request, the filter obtains the actual I/O requestor with `FltGetRequestorProcessId` and `FltGetRequestorProcess`, then requires both PID and process start key to match the grant. This prevents a different process from inheriting a still-live grant if Windows reuses the Broker's PID after an abnormal Broker termination.
+For every protected delete request, the filter obtains the actual I/O requestor through Filter Manager and requires both PID and process start key to match. Windows PID reuse therefore cannot inherit a surviving grant after an abnormal Broker exit.
 
-The driver does not retain a long-lived `EPROCESS` reference for the grant. It references the process only while resolving the grant identity, reads the start key, and immediately dereferences the object.
+The driver does not retain a long-lived `EPROCESS` reference. It references the process only while resolving identity, reads the start key, then dereferences it.
 
-A grant covers the target and descendants so one elevated recursive delete can remove a tree. The broker normally requests 15 seconds and explicitly revokes the grant in `finally` after the operation.
+A delete grant covers the approved target and descendants so one elevated recursive delete can remove a tree. The Broker normally requests 15 seconds and explicitly revokes the grant in `finally`.
 
-While the v0.1 ACL is temporarily absent, unrelated processes remain blocked by the minifilter. The runtime validation harness includes a competing-process race test specifically for this boundary.
+## Namespace-denial UX
 
-## Communication security and protocol v3
+Protocol v3 preserves the same fixed managed/native ABI. `DriverDeleteOperation.NamespaceMutation` / `DgDeleteOperationNamespaceMutation` identifies rename/move denial events without changing structure sizes.
 
-The driver exposes `\DeleteGuardPort` through `FltCreateCommunicationPort` with the Filter Manager default security descriptor for `FLT_PORT_ALL_ACCESS`. The port therefore remains restricted to privileged callers rather than being opened directly to a normal desktop Agent.
+The Relay persists these events but marks them non-approvable. The Agent shows a warning only; it never turns a denied rename/move into Yes -> UAC -> Broker delete.
 
-Protocol v3 distinguishes two connection roles:
+## Communication security
 
-- **Command**: privileged Broker/Relay policy synchronization (`ping`, reset/add/remove roots, grant, revoke).
-- **Event**: LocalSystem Event Relay receives delete-denied notifications.
+The driver exposes `\DeleteGuardPort` with Filter Manager's privileged security descriptor. Protocol v3 distinguishes:
 
-The process start key is internal kernel grant state, so the user-mode command ABI does not change and protocol v3 remains valid.
+- **Command** clients for policy synchronization and delete grant management;
+- **Event** client for the LocalSystem Relay.
 
-The Agent never receives kernel command access. The Relay persists a bounded read-only denial history under `%ProgramData%\DeleteGuard` for the Agent.
+The normal desktop Agent never receives kernel command access.
 
-Kernel event delivery is zero-wait/best-effort. A missing or slow user-mode listener must never stall filesystem I/O or convert a deny into an allow.
+Kernel event delivery is zero-wait/best-effort. A missing or slow user-mode listener cannot stall filesystem I/O and cannot convert a deny into an allow.
 
-The C# side contains ABI-size/layout tests for the fixed native/managed protocol structures.
+## Build verification
 
-## Build
-
-The x64 driver build is pinned to the VS2022-compatible WDK/SDK `10.0.26100.6584` NuGet packages.
+The x64 build is pinned to the VS2022-compatible WDK/SDK `10.0.26100.6584` NuGet toolchain.
 
 ```powershell
 .\scripts\build-driver.ps1 -Configuration Release
 ```
 
-Output:
+CI verifies:
 
-```text
-artifacts\driver-x64\DeleteGuardFilter.sys
-artifacts\driver-x64\DeleteGuardFilter.inf
-artifacts\driver-x64\DeleteGuardFilter.cat
-```
+- WDK x64 compilation;
+- warnings-as-errors;
+- Universal ApiValidator;
+- INF/package generation and Inf2Cat signability;
+- managed protocol/build/tests/package;
+- Windows PowerShell 5.1 parsing of test-VM scripts;
+- destructive-test path boundary smoke checks.
 
-CI deliberately publishes an **unsigned** driver artifact.
+The CI driver artifact remains **unsigned**.
 
-## Runtime testing and signing
+## Runtime validation
 
-Do not load the CI driver on a production machine. Build verification, Universal ApiValidator and Inf2Cat signability are not substitutes for a loaded-driver test.
+Do not load the CI driver on a normal or production machine. Build verification is not a loaded-driver test.
 
-Use the guarded disposable-VM runbook:
+Use the guarded disposable-VM runbook in [RUNTIME-VALIDATION.md](RUNTIME-VALIDATION.md). The harness covers test signing, Filter Manager load/unload, targeted Driver Verifier, multiple delete paths, relay outage, stress, grant races, and namespace move/replace races.
 
-- [RUNTIME-VALIDATION.md](RUNTIME-VALIDATION.md)
+The interactive Agent/UAC acceptance remains manual because it validates a real desktop session and Windows secure-desktop elevation flow.
 
-The test harness covers local test signing, Filter Manager load/unload, targeted Driver Verifier, multiple deletion paths, Relay outage behavior, repeated denial stress, scoped-grant race testing and optional driver reload/ACL fallback.
+## Remaining namespace boundary
 
-The interactive Agent/UAC acceptance remains manual by design because it validates a real desktop session and Windows secure-desktop elevation flow.
+NTFS hard-link creation uses `FileLinkInformation` / `FileLinkInformationEx` and can introduce another pathname for an existing file. It is a separate v0.2.6 hardening item. Until it is gated and runtime-validated, DeleteGuard should not claim complete alias containment for all NTFS namespace mechanisms.
+
+Reparse-point protection roots remain rejected.
 
 ## Production release blockers
 
 Before any public/production driver release, DeleteGuard still needs:
 
-1. a Microsoft-assigned production minifilter altitude;
-2. a production driver signing / attestation or HLK path as applicable;
+1. Microsoft-assigned production minifilter altitude;
+2. production driver signing / attestation or HLK path as applicable;
 3. recorded loaded-driver VM runs under Driver Verifier with no violations;
-4. stress/race testing results retained as release evidence;
-5. destructive rename/move-out enforcement or an explicitly accepted scope boundary;
-6. service/driver tamper-hardening review and recovery/uninstall validation.
+4. retained stress/race evidence for delete and namespace gates;
+5. hard-link/alias policy completion or an explicitly documented accepted boundary;
+6. service/driver tamper-hardening review;
+7. recovery and uninstall validation.
 
-The altitude in `DeleteGuardFilter.inf` is development-only and must not be shipped as a production altitude.
+The altitude in `DeleteGuardFilter.inf` is development-only and must not ship as a production altitude.
