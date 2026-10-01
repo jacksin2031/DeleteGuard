@@ -1,12 +1,18 @@
 #include <fltKernel.h>
 #include "DeleteGuardFilter.h"
 
+#define DG_MAX_COMMAND_CLIENTS 4
+#define DG_CONNECTION_COOKIE_COMMAND_BASE 1u
+#define DG_CONNECTION_COOKIE_EVENT 0x100u
+
 PFLT_FILTER gFilterHandle = NULL;
 PFLT_PORT gServerPort = NULL;
-PFLT_PORT gClientPort = NULL;
+PFLT_PORT gCommandClientPorts[DG_MAX_COMMAND_CLIENTS];
+PFLT_PORT gEventClientPort = NULL;
 EX_PUSH_LOCK gStateLock;
 DG_ROOT_ENTRY gRoots[DG_MAX_ROOTS];
 DG_GRANT_ENTRY gGrants[DG_MAX_GRANTS];
+volatile LONG64 gEventSequence = 0;
 
 DRIVER_INITIALIZE DriverEntry;
 
@@ -40,7 +46,13 @@ static NTSTATUS DgPortMessage(
     _Out_ PULONG ReturnOutputBufferLength);
 
 static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data);
-static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(_Inout_ PFLT_CALLBACK_DATA Data);
+static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ DG_DELETE_OPERATION Operation);
+static VOID DgPublishDeniedEvent(
+    _In_ PCUNICODE_STRING Name,
+    _In_ ULONG ProcessId,
+    _In_ DG_DELETE_OPERATION Operation);
 static BOOLEAN DgPathIsSameOrDescendant(_In_ PCUNICODE_STRING Candidate, _In_reads_(RootChars) const WCHAR *Root, _In_ USHORT RootChars);
 static BOOLEAN DgIsProtectedAndGranted(_In_ PCUNICODE_STRING Name, _In_ ULONG ProcessId, _Out_ PBOOLEAN Granted);
 static NTSTATUS DgReadCommandPath(_In_ const DG_COMMAND *Command, _Out_ PUSHORT LengthChars);
@@ -49,6 +61,7 @@ static NTSTATUS DgRemoveRoot(_In_ const DG_COMMAND *Command);
 static NTSTATUS DgGrant(_In_ const DG_COMMAND *Command);
 static NTSTATUS DgRevoke(_In_ const DG_COMMAND *Command);
 static ULONG DgRootCountLocked(VOID);
+static BOOLEAN DgIsCommandCookie(_In_ ULONG_PTR Cookie);
 
 CONST FLT_OPERATION_REGISTRATION gCallbacks[] = {
     { IRP_MJ_CREATE, 0, DgPreCreate, NULL },
@@ -92,6 +105,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
     ExInitializePushLock(&gStateLock);
     RtlZeroMemory(gRoots, sizeof(gRoots));
     RtlZeroMemory(gGrants, sizeof(gGrants));
+    RtlZeroMemory(gCommandClientPorts, sizeof(gCommandClientPorts));
 
     status = FltRegisterFilter(DriverObject, &gRegistration, &gFilterHandle);
     if (!NT_SUCCESS(status)) {
@@ -121,7 +135,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         DgPortConnect,
         DgPortDisconnect,
         DgPortMessage,
-        1);
+        DG_MAX_COMMAND_CLIENTS + 1);
 
     FltFreeSecurityDescriptor(securityDescriptor);
 
@@ -144,6 +158,8 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
 
 static NTSTATUS DgUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
 {
+    ULONG index;
+
     UNREFERENCED_PARAMETER(Flags);
     PAGED_CODE();
 
@@ -152,11 +168,17 @@ static NTSTATUS DgUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
         gServerPort = NULL;
     }
 
-    if (gClientPort != NULL && gFilterHandle != NULL) {
-        FltCloseClientPort(gFilterHandle, &gClientPort);
-    }
-
     if (gFilterHandle != NULL) {
+        for (index = 0; index < DG_MAX_COMMAND_CLIENTS; ++index) {
+            if (gCommandClientPorts[index] != NULL) {
+                FltCloseClientPort(gFilterHandle, &gCommandClientPorts[index]);
+            }
+        }
+
+        if (gEventClientPort != NULL) {
+            FltCloseClientPort(gFilterHandle, &gEventClientPort);
+        }
+
         FltUnregisterFilter(gFilterHandle);
         gFilterHandle = NULL;
     }
@@ -175,7 +197,6 @@ static NTSTATUS DgInstanceSetup(
     UNREFERENCED_PARAMETER(VolumeDeviceType);
     PAGED_CODE();
 
-    // v0.2 intentionally matches the v0.1 NTFS-only ACL safety boundary.
     if (VolumeFilesystemType != FLT_FSTYPE_NTFS) {
         return STATUS_FLT_DO_NOT_ATTACH;
     }
@@ -195,7 +216,7 @@ static FLT_PREOP_CALLBACK_STATUS DgPreCreate(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    return DgEnforceDelete(Data);
+    return DgEnforceDelete(Data, DgDeleteOperationDeleteOnClose);
 }
 
 static FLT_PREOP_CALLBACK_STATUS DgPreSetInformation(
@@ -210,7 +231,7 @@ static FLT_PREOP_CALLBACK_STATUS DgPreSetInformation(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    return DgEnforceDelete(Data);
+    return DgEnforceDelete(Data, DgDeleteOperationDisposition);
 }
 
 static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data)
@@ -234,7 +255,9 @@ static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data)
     return FALSE;
 }
 
-static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(_Inout_ PFLT_CALLBACK_DATA Data)
+static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ DG_DELETE_OPERATION Operation)
 {
     NTSTATUS status;
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
@@ -255,20 +278,62 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(_Inout_ PFLT_CALLBACK_DATA Data
     }
 
     if (!NT_SUCCESS(status) || nameInfo == NULL) {
-        // The ACL layer remains the v0.2 fallback if a name cannot be resolved.
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     isProtected = DgIsProtectedAndGranted(&nameInfo->Name, processId, &granted);
-    FltReleaseFileNameInformation(nameInfo);
-
     if (!isProtected || granted) {
+        FltReleaseFileNameInformation(nameInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
+
+    DgPublishDeniedEvent(&nameInfo->Name, processId, Operation);
+    FltReleaseFileNameInformation(nameInfo);
 
     Data->IoStatus.Status = STATUS_ACCESS_DENIED;
     Data->IoStatus.Information = 0;
     return FLT_PREOP_COMPLETE;
+}
+
+static VOID DgPublishDeniedEvent(
+    _In_ PCUNICODE_STRING Name,
+    _In_ ULONG ProcessId,
+    _In_ DG_DELETE_OPERATION Operation)
+{
+    DG_EVENT event = { 0 };
+    LARGE_INTEGER timeout;
+    USHORT chars;
+
+    if (gFilterHandle == NULL || gEventClientPort == NULL || Name == NULL || Name->Buffer == NULL) {
+        return;
+    }
+
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        return;
+    }
+
+    chars = (USHORT)(Name->Length / sizeof(WCHAR));
+    if (chars >= DG_MAX_PATH_CHARS) {
+        chars = DG_MAX_PATH_CHARS - 1;
+    }
+
+    event.Version = DG_PROTOCOL_VERSION;
+    event.Type = DgEventDeleteDenied;
+    event.ProcessId = ProcessId;
+    event.Operation = Operation;
+    event.Sequence = (ULONGLONG)InterlockedIncrement64(&gEventSequence);
+    RtlCopyMemory(event.Path, Name->Buffer, chars * sizeof(WCHAR));
+    event.Path[chars] = L'\0';
+
+    timeout.QuadPart = 0;
+    (VOID)FltSendMessage(
+        gFilterHandle,
+        &gEventClientPort,
+        &event,
+        sizeof(event),
+        NULL,
+        NULL,
+        &timeout);
 }
 
 static BOOLEAN DgPathIsSameOrDescendant(
@@ -348,27 +413,76 @@ static NTSTATUS DgPortConnect(
     _In_ ULONG SizeOfContext,
     _Outptr_result_maybenull_ PVOID *ConnectionCookie)
 {
-    UNREFERENCED_PARAMETER(ServerPortCookie);
-    UNREFERENCED_PARAMETER(ConnectionContext);
-    UNREFERENCED_PARAMETER(SizeOfContext);
+    DG_CONNECT_CONTEXT context;
+    ULONG index;
 
-    if (ConnectionCookie != NULL) {
-        *ConnectionCookie = NULL;
+    UNREFERENCED_PARAMETER(ServerPortCookie);
+
+    if (ConnectionCookie == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *ConnectionCookie = NULL;
+
+    if (ConnectionContext == NULL || SizeOfContext < sizeof(context)) {
+        return STATUS_INVALID_PARAMETER;
     }
 
-    if (InterlockedCompareExchangePointer((PVOID volatile *)&gClientPort, ClientPort, NULL) != NULL) {
+    __try {
+        RtlCopyMemory(&context, ConnectionContext, sizeof(context));
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
+    }
+
+    if (context.Version != DG_PROTOCOL_VERSION) {
+        return STATUS_REVISION_MISMATCH;
+    }
+
+    if (context.Role == DgClientRoleCommand) {
+        for (index = 0; index < DG_MAX_COMMAND_CLIENTS; ++index) {
+            if (InterlockedCompareExchangePointer(
+                    (PVOID volatile *)&gCommandClientPorts[index],
+                    ClientPort,
+                    NULL) == NULL) {
+                *ConnectionCookie = (PVOID)(ULONG_PTR)(DG_CONNECTION_COOKIE_COMMAND_BASE + index);
+                return STATUS_SUCCESS;
+            }
+        }
+
         return STATUS_DEVICE_BUSY;
     }
 
-    return STATUS_SUCCESS;
+    if (context.Role == DgClientRoleEvent) {
+        if (InterlockedCompareExchangePointer(
+                (PVOID volatile *)&gEventClientPort,
+                ClientPort,
+                NULL) != NULL) {
+            return STATUS_DEVICE_BUSY;
+        }
+
+        *ConnectionCookie = (PVOID)(ULONG_PTR)DG_CONNECTION_COOKIE_EVENT;
+        return STATUS_SUCCESS;
+    }
+
+    return STATUS_INVALID_PARAMETER;
 }
 
 static VOID DgPortDisconnect(_In_opt_ PVOID ConnectionCookie)
 {
-    UNREFERENCED_PARAMETER(ConnectionCookie);
+    ULONG_PTR cookie = (ULONG_PTR)ConnectionCookie;
 
-    if (gFilterHandle != NULL && gClientPort != NULL) {
-        FltCloseClientPort(gFilterHandle, &gClientPort);
+    if (gFilterHandle == NULL) {
+        return;
+    }
+
+    if (DgIsCommandCookie(cookie)) {
+        ULONG index = (ULONG)(cookie - DG_CONNECTION_COOKIE_COMMAND_BASE);
+        if (gCommandClientPorts[index] != NULL) {
+            FltCloseClientPort(gFilterHandle, &gCommandClientPorts[index]);
+        }
+    }
+    else if (cookie == DG_CONNECTION_COOKIE_EVENT && gEventClientPort != NULL) {
+        FltCloseClientPort(gFilterHandle, &gEventClientPort);
     }
 }
 
@@ -385,7 +499,9 @@ static NTSTATUS DgPortMessage(
     DG_REPLY reply = { 0 };
     const DG_COMMAND *command = &commandCopy;
 
-    UNREFERENCED_PARAMETER(PortCookie);
+    if (!DgIsCommandCookie((ULONG_PTR)PortCookie)) {
+        return STATUS_ACCESS_DENIED;
+    }
 
     if (ReturnOutputBufferLength == NULL) {
         return STATUS_INVALID_PARAMETER;
@@ -408,9 +524,6 @@ static NTSTATUS DgPortMessage(
         return STATUS_DATATYPE_MISALIGNMENT;
     }
 
-    // FltMgr probes user buffers but the pointers are still unlocked user-mode
-    // addresses. Copy them under SEH before dereferencing, as required for a
-    // PFLT_MESSAGE_NOTIFY callback.
     __try {
         RtlCopyMemory(&commandCopy, InputBuffer, sizeof(commandCopy));
     }
@@ -476,6 +589,12 @@ Complete:
 
     *ReturnOutputBufferLength = sizeof(reply);
     return STATUS_SUCCESS;
+}
+
+static BOOLEAN DgIsCommandCookie(_In_ ULONG_PTR Cookie)
+{
+    return Cookie >= DG_CONNECTION_COOKIE_COMMAND_BASE &&
+        Cookie < (DG_CONNECTION_COOKIE_COMMAND_BASE + DG_MAX_COMMAND_CLIENTS);
 }
 
 static NTSTATUS DgReadCommandPath(_In_ const DG_COMMAND *Command, _Out_ PUSHORT LengthChars)

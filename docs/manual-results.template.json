@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "build": { "sourceCommit": "", "ciRun": "", "unsignedDriverSha256": "", "unsignedDriverArtifactPath": "", "testSignedDriverSha256": "", "testSignedDriverArtifactPath": "", "testSigningCertificateThumbprint": "" },
+  "environment": { "vmName": "", "snapshotId": "", "windowsBuild": "", "operator": "" },
+  "overallStatus": "NOT_RUN",
+  "cases": [
+    { "id": "explorer-delete-recycle", "status": "NOT_RUN", "observedUtc": "", "expected": "Original deletion denied; matching event and prompt", "observed": "", "evidence": [] },
+    { "id": "agent-no-close-no-response", "status": "NOT_RUN", "observedUtc": "", "expected": "Fixture remains; no approved delete; caller returns", "observed": "", "evidence": [] },
+    { "id": "agent-yes-uac-approve", "status": "NOT_RUN", "observedUtc": "", "expected": "Only exact approved target deleted by elevated Broker", "observed": "", "evidence": [] },
+    { "id": "agent-yes-uac-cancel", "status": "NOT_RUN", "observedUtc": "", "expected": "Fixture remains without grant", "observed": "", "evidence": [] },
+    { "id": "ordinary-user-boundary", "status": "NOT_RUN", "observedUtc": "", "expected": "Kernel ports and event writes denied; event reads allowed", "observed": "", "evidence": [] },
+    { "id": "recursive-callers", "status": "NOT_RUN", "observedUtc": "", "expected": "Ordinary recursive deletes denied; approved tree deletion succeeds", "observed": "", "evidence": [] },
+    { "id": "grant-pid-path-expiry-revoke", "status": "NOT_RUN", "observedUtc": "", "expected": "Grant limited to PID/path/time; revoke and expiry deny", "observed": "", "evidence": [] },
+    { "id": "event-burst-rotation", "status": "NOT_RUN", "observedUtc": "", "expected": "Bounded history and duplicate suppression; enforcement remains", "observed": "", "evidence": [] },
+    { "id": "relay-driver-restart", "status": "NOT_RUN", "observedUtc": "", "expected": "Protection and notification recovery without grant race", "observed": "", "evidence": [] },
+    { "id": "concurrent-deletion-race", "status": "NOT_RUN", "observedUtc": "", "expected": "Unauthorized files survive during approved deletion/reconnection", "observed": "", "evidence": [] },
+    { "id": "multi-user-rdp", "status": "NOT_RUN", "observedUtc": "", "expected": "Recipient/identity confirmed; no filesystem stalls", "observed": "", "evidence": [] },
+    { "id": "shutdown-reboot", "status": "NOT_RUN", "observedUtc": "", "expected": "No shutdown hang; post-boot policies and Relay recover", "observed": "", "evidence": [] },
+    { "id": "disposition-ex", "status": "NOT_RUN", "observedUtc": "", "expected": "Automated run records kernel-only denial for flags 1/3/17; manual VM gate covers grant/allowed-path behavior", "observed": "", "evidence": [] },
+    { "id": "verifier-stress", "status": "NOT_RUN", "observedUtc": "", "expected": "Recorded stress with Verifier; no unauthorized deletion or crash", "observed": "", "evidence": [] }
+  ]
+}
