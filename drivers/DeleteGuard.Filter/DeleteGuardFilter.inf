@@ -7,6 +7,12 @@ DriverVer   = 10/01/2026,0.2.0.0
 CatalogFile = DeleteGuardFilter.cat
 PnpLockdown = 1
 
+[SourceDisksFiles]
+DeleteGuardFilter.sys = 1,,
+
+[SourceDisksNames]
+1 = %DiskId1%,,,
+
 [DestinationDirs]
 MiniFilter.DriverFiles = 13
 
@@ -42,6 +48,7 @@ ProviderString     = "DeleteGuard"
 ServiceDescription = "DeleteGuard protected-path deletion minifilter"
 ServiceName        = "DeleteGuardFilter"
 DriverName         = "DeleteGuardFilter"
+DiskId1            = "DeleteGuardFilter installation media"
 DefaultInstance    = "DeleteGuardFilter Instance"
 Instance1.Name     = "DeleteGuardFilter Instance"
 ; DEVELOPMENT ONLY. Obtain a Microsoft-assigned production altitude before release.
