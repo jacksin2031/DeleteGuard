@@ -61,9 +61,19 @@ The marker is machine-bound and stored at:
 
 All subsequent test-VM scripts refuse to run without it.
 
-## 2. Build and test-sign the driver
+## 2. Run the prerequisite gate after reboot
 
-From an elevated PowerShell after reboot:
+From an elevated PowerShell:
+
+```powershell
+.\scripts\testvm\check-prerequisites.ps1
+```
+
+This records the OS/architecture, .NET/Visual Studio tooling, TESTSIGNING configuration visibility, Secure Boot state and Memory Integrity/HVCI state. It fails before driver installation when a required prerequisite is missing.
+
+BCDEdit output is localized, so the script does not treat an English `Yes` string as the final proof that test mode is active. The definitive gate is whether Windows accepts and loads the locally test-signed `DeleteGuardFilter` in the next stages.
+
+## 3. Build and test-sign the driver
 
 ```powershell
 .\scripts\testvm\sign-test-driver.ps1
@@ -73,7 +83,7 @@ This performs the normal WDK build, creates a short-lived local code-signing cer
 
 The private key is not exported from the test VM.
 
-## 3. Install and load the test stack
+## 4. Install and load the test stack
 
 ```powershell
 .\scripts\testvm\install-test-stack.ps1
@@ -87,15 +97,9 @@ To also enable the tray Agent for the currently logged-in test user:
 .\scripts\testvm\install-test-stack.ps1 -SkipUserModeBuild -EnableAgentForCurrentUser
 ```
 
-Verify manually:
+The installation step fails if Windows refuses to load the signed driver, so a bad TESTSIGNING/signature state cannot silently continue into the runtime suite.
 
-```powershell
-fltmc filters
-Get-Service DeleteGuardEventRelay
-& "$env:ProgramFiles\DeleteGuard\deleteguard.exe" doctor
-```
-
-## 4. Enable Driver Verifier
+## 5. Enable Driver Verifier
 
 ```powershell
 .\scripts\testvm\enable-verifier.ps1
@@ -110,14 +114,31 @@ verifier /bootmode resetonbootfail
 
 Only the DeleteGuard driver is selected. Reboot the VM after enabling Verifier.
 
-After reboot, confirm:
+## 6. Verify loaded state after the Verifier reboot
+
+```powershell
+.\scripts\testvm\verify-loaded-state.ps1
+```
+
+This checks that:
+
+- `DeleteGuardFilter` is present in `fltmc filters`;
+- `DeleteGuardEventRelay` is Running;
+- Driver Verifier settings reference `DeleteGuardFilter.sys` when configured;
+- `deleteguard doctor` can report the installed user-mode/kernel state.
+
+You can also inspect the underlying tools directly:
 
 ```powershell
 verifier /querysettings
 fltmc filters
+Get-Service DeleteGuardEventRelay
+& "$env:ProgramFiles\DeleteGuard\deleteguard.exe" doctor
 ```
 
-## 5. Run the automated runtime suite
+Do not run stress validation if the filter or Relay checks fail.
+
+## 7. Run the automated runtime suite
 
 From an elevated PowerShell:
 
@@ -160,7 +181,7 @@ A machine-readable report is written to:
 %ProgramData%\DeleteGuard\runtime-validation-YYYYMMDD-HHMMSS.json
 ```
 
-## 6. Manual Agent/UAC acceptance
+## 8. Manual Agent/UAC acceptance
 
 This part is intentionally not automated because it validates real desktop-session UX and Windows UAC.
 
@@ -196,7 +217,7 @@ During runtime tests, any of the following is a release blocker:
 
 If the VM bugchecks, preserve the dump and verifier settings before reverting the snapshot.
 
-## Cleanup
+## 9. Cleanup
 
 When finished:
 
