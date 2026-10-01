@@ -83,6 +83,7 @@ static BOOLEAN DgPathIsSameOrDescendant(
     _In_reads_(RootChars) const WCHAR *Root,
     _In_ USHORT RootChars);
 static BOOLEAN DgIsProtectedPath(_In_ PCUNICODE_STRING Name);
+static BOOLEAN DgPathContainsProtectedRoot(_In_ PCUNICODE_STRING Name);
 static BOOLEAN DgHasProtectedRoots(VOID);
 static BOOLEAN DgIsProtectedAndGranted(
     _In_ PCUNICODE_STRING Name,
@@ -463,6 +464,7 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRename(
     ULONG minimumLength;
     ULONG processId;
     BOOLEAN sourceProtected;
+    BOOLEAN sourceContainsProtectedRoot;
     BOOLEAN destinationProtected;
     BOOLEAN replaceIfExists = FALSE;
     BOOLEAN sourceNormalized = FALSE;
@@ -539,6 +541,21 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRename(
     }
 
     sourceProtected = DgIsProtectedPath(&sourceInfo->Name);
+    sourceContainsProtectedRoot = !sourceProtected && DgPathContainsProtectedRoot(&sourceInfo->Name);
+
+    if (sourceContainsProtectedRoot) {
+        DgPublishDeniedEvent(
+            &sourceInfo->Name,
+            processId,
+            DgEventRenameDenied,
+            DgDeleteOperationRenameProtectedAncestor);
+        FltReleaseFileNameInformation(sourceInfo);
+        ExFreePool(destinationName);
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
     if (!sourceProtected && !replaceIfExists) {
         ExFreePool(destinationName);
         return DgAllowRenameWithNameLifecycle(
@@ -713,6 +730,43 @@ static BOOLEAN DgIsProtectedPath(_In_ PCUNICODE_STRING Name)
     ExReleasePushLockShared(&gStateLock);
     KeLeaveCriticalRegion();
     return isProtected;
+}
+
+static BOOLEAN DgPathContainsProtectedRoot(_In_ PCUNICODE_STRING Name)
+{
+    ULONG index;
+    USHORT nameChars;
+    BOOLEAN containsRoot = FALSE;
+
+    if (Name == NULL || Name->Buffer == NULL || Name->Length == 0) {
+        return FALSE;
+    }
+
+    nameChars = (USHORT)(Name->Length / sizeof(WCHAR));
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&gStateLock);
+
+    for (index = 0; index < DG_MAX_ROOTS; ++index) {
+        UNICODE_STRING protectedRoot;
+
+        if (gRoots[index].Length == 0) {
+            continue;
+        }
+
+        protectedRoot.Buffer = gRoots[index].Path;
+        protectedRoot.Length = (USHORT)(gRoots[index].Length * sizeof(WCHAR));
+        protectedRoot.MaximumLength = protectedRoot.Length;
+
+        if (DgPathIsSameOrDescendant(&protectedRoot, Name->Buffer, nameChars)) {
+            containsRoot = TRUE;
+            break;
+        }
+    }
+
+    ExReleasePushLockShared(&gStateLock);
+    KeLeaveCriticalRegion();
+    return containsRoot;
 }
 
 static BOOLEAN DgHasProtectedRoots(VOID)
