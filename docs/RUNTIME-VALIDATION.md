@@ -16,6 +16,7 @@ Runtime validation therefore adds:
 - NTFS deletion attempts from several user-mode paths;
 - Event Relay outage testing;
 - broker grant/concurrent-delete race testing;
+- destructive rename boundary/race testing;
 - optional driver unload/reload + ACL fallback testing;
 - a JSON acceptance report.
 
@@ -181,6 +182,24 @@ A machine-readable report is written to:
 %ProgramData%\DeleteGuard\runtime-validation-YYYYMMDD-HHMMSS.json
 ```
 
+### 7a. Run the destructive rename boundary race suite
+
+After the base suite passes, run:
+
+```powershell
+.\scripts\testvm\run-rename-boundary-validation.ps1
+```
+
+This separate suite stays under the same hard-coded `C:\DeleteGuard-VMTest` boundary and attacks the Broker's temporary ACL-relaxation window from a competing process. It verifies:
+
+1. a protected source cannot be renamed/moved into an unprotected sibling directory;
+2. the unprotected destination is never created;
+3. an outside source cannot replace an existing protected target via `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)`;
+4. the protected target keeps its original contents;
+5. the outside replacement source remains intact;
+6. Event Relay receives operation `3` (`RenameOut`) and operation `4` (`RenameReplace`);
+7. both destructive rename events are persisted with `canApprove=false` and therefore cannot enter the automatic UAC delete-approval path.
+
 ## 8. Manual Agent/UAC acceptance
 
 This part is intentionally not automated because it validates real desktop-session UX and Windows UAC.
@@ -203,6 +222,8 @@ This part is intentionally not automated because it validates real desktop-sessi
 
 Repeat the same UX path from a non-elevated PowerShell `Remove-Item` attempt.
 
+For v0.2.5, also verify that a blocked protected move-out and a blocked replace-existing rename produce warning-only Agent notifications and **never** offer the delete/UAC approval action.
+
 ## Crash / verifier acceptance
 
 During runtime tests, any of the following is a release blocker:
@@ -210,9 +231,10 @@ During runtime tests, any of the following is a release blocker:
 - BSOD / bugcheck attributable to `DeleteGuardFilter.sys`;
 - Driver Verifier violation;
 - filter unload deadlock or hang;
-- unexpected deletion of a protected test file;
-- unrelated process gaining delete access during a scoped grant;
+- unexpected deletion, move-out, or overwrite of protected test data;
+- unrelated process gaining delete/rename access during a scoped grant;
 - policy not being restored after Event Relay/driver restart;
+- destructive rename event becoming automatically approvable;
 - Agent approval deleting a path different from the displayed target.
 
 If the VM bugchecks, preserve the dump and verifier settings before reverting the snapshot.
