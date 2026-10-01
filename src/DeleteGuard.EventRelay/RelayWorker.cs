@@ -161,7 +161,8 @@ public sealed class RelayWorker : BackgroundService
             return;
         }
 
-        var canApprove = NtPathConverter.TryFromNtPath(driverEvent.Path, out var targetPath);
+        var mapped = NtPathConverter.TryFromNtPath(driverEvent.Path, out var targetPath);
+        var canApprove = mapped && driverEvent.Operation != DriverDeleteOperation.RenameOut;
         var record = new DeniedDeleteEventRecord
         {
             EventId = Guid.NewGuid(),
@@ -171,13 +172,14 @@ public sealed class RelayWorker : BackgroundService
             ProcessName = TryGetProcessName(driverEvent.ProcessId),
             Operation = driverEvent.Operation,
             NtPath = driverEvent.Path,
-            TargetPath = canApprove ? targetPath : driverEvent.Path,
+            TargetPath = mapped ? targetPath : driverEvent.Path,
             CanApprove = canApprove
         };
 
         _eventStore.Append(record);
         _logger.LogInformation(
-            "Recorded denied delete event {EventId} pid={ProcessId} path={Path}",
+            "Recorded denied protected operation {Operation} event {EventId} pid={ProcessId} path={Path}",
+            record.Operation,
             record.EventId,
             record.ProcessId,
             record.TargetPath);
