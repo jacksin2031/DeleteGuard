@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, feature/mvp]
+    branches: [main, feature/mvp, feature/minifilter-v0.2]
   pull_request:
 
 permissions:
@@ -30,4 +30,19 @@ jobs:
         with:
           name: DeleteGuard-win-x64
           path: artifacts/win-x64/
+          if-no-files-found: error
+
+  build-minifilter:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: NuGet/setup-nuget@v2
+      - name: Build unsigned x64 minifilter
+        shell: pwsh
+        run: ./scripts/build-driver.ps1 -Configuration Release
+      - name: Upload unsigned driver package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeleteGuard-minifilter-x64-unsigned
+          path: artifacts/driver-x64/
           if-no-files-found: error

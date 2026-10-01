@@ -11,6 +11,14 @@ artifacts/
 .idea/
 .vscode/
 
+# Native / WDK restore + build
+packages/
+drivers/**/bin/
+drivers/**/obj/
+*.pdb
+*.exp
+*.lib
+
 # Windows packaging
 *.pfx
 *.cer
