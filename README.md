@@ -2,9 +2,16 @@
 
 DeleteGuard is a Windows protection tool that makes deletion of selected NTFS folders or data volumes an **administrator-approved action**.
 
-The v0.1 MVP deliberately uses NTFS ACL enforcement so it can be built and tested without shipping an unsigned kernel driver. A future minifilter version is planned for stronger enforcement.
+## v0.2 architecture
 
-## MVP behaviour
+DeleteGuard uses two enforcement layers:
+
+1. **NTFS ACL fallback** — inherited deny rules for `DELETE` and `DELETE_CHILD` block ordinary deletion even when the minifilter is not available.
+2. **DeleteGuardFilter.sys** — a filesystem minifilter blocks destructive delete requests at the I/O layer unless the deleting PID has a short-lived, path-scoped grant issued by the elevated broker.
+
+This closes the main v0.1 race: during an approved deletion the broker must temporarily relax the ACL, but the minifilter continues blocking every other process while allowing only the broker PID on the approved target path.
+
+## Behaviour
 
 After protecting a path:
 
@@ -12,18 +19,33 @@ After protecting a path:
 # UAC prompt
 deleteguard protect D:\Projects\Important
 
-# These should fail with Access Denied
+# Denied by ACL, and by the minifilter when it is installed/running
 Remove-Item D:\Projects\Important -Recurse -Force
 cmd /c rmdir /s /q D:\Projects\Important
 # Explorer deletion is also denied.
 
-# This launches the UAC broker and performs one approved deletion
+# UAC-approved deletion
 deleteguard delete D:\Projects\Important\old-build
 ```
 
-`deleteguard delete` is intentionally the approval path in v0.1. An arbitrary failing `Remove-Item` or Explorer delete does **not** automatically open a UAC prompt; it is denied. Automatic interception-and-prompting requires the planned filesystem minifilter.
+When the minifilter is active, `deleteguard delete` performs this sequence:
 
-Because Windows uses the `DELETE` access right for rename/move semantics too, v0.1 strict protection can also block renames, moves and some applications' atomic-save/replace workflows inside the protected tree. Use the MVP first on archive/critical-data folders. The minifilter phase will distinguish destructive deletion from safe in-scope renames.
+```text
+sync protected roots
+-> grant {DeleteGuard.Broker PID + target + 15s TTL}
+-> relax ACL
+-> delete
+-> revoke grant
+-> restore/sync protection
+```
+
+If the driver is absent, the v0.1 ACL path remains functional. If the driver is present but rejects policy synchronization or a grant, DeleteGuard fails closed and does not relax the ACL.
+
+### Current UX boundary
+
+An arbitrary failing `Remove-Item` or Explorer delete is currently **denied**; it does not yet automatically open a UAC prompt. `deleteguard delete <path>` is the approval path.
+
+The next UI layer will turn denied kernel events into an interactive approval request. The kernel driver itself will never display UI.
 
 ## Commands
 
@@ -39,33 +61,17 @@ deleteguard doctor
 
 Protecting the Windows system-volume root is refused. Protecting a non-system NTFS volume root requires the explicit `--allow-volume-root` option.
 
-## Architecture
+## Kernel operations covered in v0.2
 
-```text
-Explorer / cmd / PowerShell / apps
-              |
-              v
-       NTFS access check
-       DENY delete/delete-child
-              |
-          Access Denied
+The minifilter currently gates:
 
-User -> deleteguard.exe
-              |
-              v
-        UAC / runas
-              |
-              v
-   DeleteGuard.Broker.exe
-      |        |        |
-      |        |        +--> audit.jsonl
-      |        +----------> policies.json
-      +-------------------> controlled ACL release -> delete -> re-apply
-```
+- `FileDispositionInformation`
+- `FileDispositionInformationEx`
+- `FILE_DELETE_ON_CLOSE`
 
-The CLI runs unelevated. Only the broker has a `requireAdministrator` manifest. Administrative operations are serialized with a global mutex.
+This covers the normal destructive delete paths used by Explorer, shell commands, PowerShell and Win32 applications once the driver is installed and active.
 
-## Build
+## Build user-mode package
 
 Requirements:
 
@@ -80,9 +86,29 @@ cd DeleteGuard
 .\scripts\build.ps1
 ```
 
-The package is written to `artifacts\win-x64`.
+Output:
 
-## Install
+```text
+artifacts\win-x64
+```
+
+## Build minifilter
+
+The x64 driver build is pinned to the VS2022-compatible WDK/SDK `10.0.26100.6584` NuGet toolchain.
+
+```powershell
+.\scripts\build-driver.ps1 -Configuration Release
+```
+
+Output:
+
+```text
+artifacts\driver-x64
+```
+
+The CI driver artifact is intentionally **unsigned**. Do not load it on a production machine. See [docs/MINIFILTER.md](docs/MINIFILTER.md).
+
+## Install user-mode package
 
 From an elevated PowerShell:
 
@@ -95,6 +121,8 @@ Open a new terminal and verify:
 ```powershell
 deleteguard doctor
 ```
+
+Driver installation is intentionally not automated in the normal installer while v0.2 remains a development minifilter requiring test/production signing and a production altitude.
 
 ## Safe first test
 
@@ -112,9 +140,7 @@ deleteguard delete C:\DeleteGuard-Test\hello.txt  # UAC approval
 deleteguard unprotect C:\DeleteGuard-Test
 ```
 
-## Data files
-
-Runtime state lives under:
+## Runtime state
 
 ```text
 %ProgramData%\DeleteGuard\policies.json
@@ -123,6 +149,6 @@ Runtime state lives under:
 
 ## Security scope
 
-v0.1 is designed to prevent **accidental deletion and deletion by ordinary non-elevated processes**. It is not yet a kernel-enforced boundary against a malicious local administrator, raw disk access, formatting, offline access or physical failure. See [SECURITY.md](SECURITY.md).
+DeleteGuard is designed to prevent accidental or unauthorized destructive file operations on configured paths. It is not a backup and does not protect against raw disk writes, partition deletion, formatting, offline attacks, filesystem corruption or physical device failure.
 
-The roadmap for the filesystem minifilter and stronger volume protection is in [docs/ROADMAP.md](docs/ROADMAP.md).
+See [SECURITY.md](SECURITY.md), [docs/MINIFILTER.md](docs/MINIFILTER.md), and [docs/ROADMAP.md](docs/ROADMAP.md).
