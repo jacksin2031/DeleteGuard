@@ -348,6 +348,7 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRenameBoundary(
     PWSTR fileNameCopy = NULL;
     FILE_INFORMATION_CLASS infoClass;
     BOOLEAN sourceProtected;
+    BOOLEAN hasProtectedRoots;
     BOOLEAN replaceRequested = FALSE;
     DG_DELETE_OPERATION renameOperation = (DG_DELETE_OPERATION)0;
     PCUNICODE_STRING eventName;
@@ -370,16 +371,8 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRenameBoundary(
     }
 
     sourceProtected = DgIsProtectedPath(&sourceNameInfo->Name);
-    if (!sourceProtected && !DgHasProtectedRoots()) {
-        FltReleaseFileNameInformation(sourceNameInfo);
-        return FLT_PREOP_SUCCESS_NO_CALLBACK;
-    }
-
-    if (FltObjects == NULL || FltObjects->Instance == NULL || Data->Iopb->TargetFileObject == NULL) {
-        if (sourceProtected) {
-            renameOperation = DgDeleteOperationRenameOut;
-            goto Deny;
-        }
+    hasProtectedRoots = DgHasProtectedRoots();
+    if (!sourceProtected && !hasProtectedRoots) {
         FltReleaseFileNameInformation(sourceNameInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -416,13 +409,36 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRenameBoundary(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
+    if (FltObjects == NULL || FltObjects->Instance == NULL || Data->Iopb->TargetFileObject == NULL) {
+        if (sourceProtected) {
+            renameOperation = DgDeleteOperationRenameOut;
+        }
+        else if (replaceRequested && hasProtectedRoots) {
+            renameOperation = DgDeleteOperationRenameReplace;
+        }
+
+        if (renameOperation != 0) {
+            goto Deny;
+        }
+
+        FltReleaseFileNameInformation(sourceNameInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
     if (fileNameLength == 0 ||
         (fileNameLength % sizeof(WCHAR)) != 0 ||
         fileNameLength > (infoLength - minimumLength)) {
         if (sourceProtected) {
             renameOperation = DgDeleteOperationRenameOut;
+        }
+        else if (replaceRequested && hasProtectedRoots) {
+            renameOperation = DgDeleteOperationRenameReplace;
+        }
+
+        if (renameOperation != 0) {
             goto Deny;
         }
+
         FltReleaseFileNameInformation(sourceNameInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -434,8 +450,15 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRenameBoundary(
     if (fileNameCopy == NULL) {
         if (sourceProtected) {
             renameOperation = DgDeleteOperationRenameOut;
+        }
+        else if (replaceRequested && hasProtectedRoots) {
+            renameOperation = DgDeleteOperationRenameReplace;
+        }
+
+        if (renameOperation != 0) {
             goto Deny;
         }
+
         FltReleaseFileNameInformation(sourceNameInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -448,8 +471,15 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRenameBoundary(
         fileNameCopy = NULL;
         if (sourceProtected) {
             renameOperation = DgDeleteOperationRenameOut;
+        }
+        else if (replaceRequested && hasProtectedRoots) {
+            renameOperation = DgDeleteOperationRenameReplace;
+        }
+
+        if (renameOperation != 0) {
             goto Deny;
         }
+
         FltReleaseFileNameInformation(sourceNameInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -481,8 +511,15 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRenameBoundary(
     if (!NT_SUCCESS(status) || destinationNameInfo == NULL) {
         if (sourceProtected) {
             renameOperation = DgDeleteOperationRenameOut;
+        }
+        else if (replaceRequested && hasProtectedRoots) {
+            renameOperation = DgDeleteOperationRenameReplace;
+        }
+
+        if (renameOperation != 0) {
             goto Deny;
         }
+
         FltReleaseFileNameInformation(sourceNameInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }

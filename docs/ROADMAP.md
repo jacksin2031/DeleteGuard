@@ -96,6 +96,14 @@ Implemented on the stacked development branch:
 
 Release gate remaining: execute the complete stacked harness in an actual disposable Windows 11 VM, retain runtime report/dumps/verifier evidence, complete the manual Explorer/Agent/UAC checklist, and resolve any loaded-driver findings before promoting the minifilter stack.
 
+## v0.2.6 unresolved replace fail-closed — implementation in validation
+
+- Parse rename replacement intent before relying on destination-name resolution.
+- When protected roots are active, a known replace-existing rename is denied if Filter Manager context, filename buffering, or destination resolution cannot be trusted.
+- Protected-source failures remain classified as RenameOut; unresolved outside-source replacement attempts are classified as RenameReplace.
+- Ordinary non-replace rename behavior is unchanged.
+- Protocol v3 and event structure sizes are unchanged.
+
 ## v0.3 volume protection
 
 - Detect and gate destructive volume operations where feasible.
