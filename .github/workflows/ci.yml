@@ -34,6 +34,23 @@ jobs:
             $allErrors | Write-Error
             exit 1
           }
+      - name: Smoke test test-VM destructive path boundary
+        shell: powershell
+        run: |
+          . .\scripts\testvm\TestVm.Common.ps1
+          Assert-DeleteGuardSafeTestPath -Path 'C:\DeleteGuard-VMTest'
+          Assert-DeleteGuardSafeTestPath -Path 'C:\DeleteGuard-VMTest\safe-child\file.txt'
+          $outsideWasRejected = $false
+          try {
+            Assert-DeleteGuardSafeTestPath -Path 'C:\Windows'
+          }
+          catch {
+            $outsideWasRejected = $true
+          }
+          if (-not $outsideWasRejected) {
+            Write-Error 'Safety boundary accepted C:\Windows unexpectedly.'
+            exit 1
+          }
       - name: Restore
         run: dotnet restore DeleteGuard.sln
       - name: Build
