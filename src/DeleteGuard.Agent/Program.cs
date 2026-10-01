@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
+using DeleteGuard.Core.Driver;
 using DeleteGuard.Core.Models;
 using DeleteGuard.Core.Services;
 
@@ -38,7 +39,7 @@ internal sealed class ApprovalContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _timer;
     private bool _polling;
     private DateTimeOffset _lastThrottleNoticeUtc = DateTimeOffset.MinValue;
-    private DateTimeOffset _lastUnmappableNoticeUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastNonApprovalNoticeUtc = DateTimeOffset.MinValue;
 
     public ApprovalContext()
     {
@@ -107,7 +108,7 @@ internal sealed class ApprovalContext : ApplicationContext
 
                 if (!record.CanApprove)
                 {
-                    ShowUnmappableNotice(record, decisionTime);
+                    ShowNonApprovalNotice(record, decisionTime);
                     continue;
                 }
 
@@ -136,14 +137,25 @@ internal sealed class ApprovalContext : ApplicationContext
         }
     }
 
-    private void ShowUnmappableNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
+    private void ShowNonApprovalNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
     {
-        if (now - _lastUnmappableNoticeUtc < TimeSpan.FromSeconds(15))
+        if (now - _lastNonApprovalNoticeUtc < TimeSpan.FromSeconds(15))
         {
             return;
         }
 
-        _lastUnmappableNoticeUtc = now;
+        _lastNonApprovalNoticeUtc = now;
+
+        if (record.Operation == DriverDeleteOperation.RenameOut)
+        {
+            _notifyIcon.ShowBalloonTip(
+                6000,
+                "DeleteGuard blocked a protected move",
+                $"Moving or renaming this protected item outside its protected root was denied: {record.TargetPath}. Automatic approval is intentionally unavailable for move-out operations.",
+                ToolTipIcon.Warning);
+            return;
+        }
+
         _notifyIcon.ShowBalloonTip(
             5000,
             "DeleteGuard blocked a deletion",
