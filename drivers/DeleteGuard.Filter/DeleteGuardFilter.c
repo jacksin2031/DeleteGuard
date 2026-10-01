@@ -1,9 +1,13 @@
 #include <fltKernel.h>
 #include "DeleteGuardFilter.h"
 
+#define DG_MAX_COMMAND_CLIENTS 4
+#define DG_CONNECTION_COOKIE_COMMAND_BASE 1u
+#define DG_CONNECTION_COOKIE_EVENT 0x100u
+
 PFLT_FILTER gFilterHandle = NULL;
 PFLT_PORT gServerPort = NULL;
-PFLT_PORT gCommandClientPort = NULL;
+PFLT_PORT gCommandClientPorts[DG_MAX_COMMAND_CLIENTS];
 PFLT_PORT gEventClientPort = NULL;
 EX_PUSH_LOCK gStateLock;
 DG_ROOT_ENTRY gRoots[DG_MAX_ROOTS];
@@ -57,6 +61,7 @@ static NTSTATUS DgRemoveRoot(_In_ const DG_COMMAND *Command);
 static NTSTATUS DgGrant(_In_ const DG_COMMAND *Command);
 static NTSTATUS DgRevoke(_In_ const DG_COMMAND *Command);
 static ULONG DgRootCountLocked(VOID);
+static BOOLEAN DgIsCommandCookie(_In_ ULONG_PTR Cookie);
 
 CONST FLT_OPERATION_REGISTRATION gCallbacks[] = {
     { IRP_MJ_CREATE, 0, DgPreCreate, NULL },
@@ -100,6 +105,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
     ExInitializePushLock(&gStateLock);
     RtlZeroMemory(gRoots, sizeof(gRoots));
     RtlZeroMemory(gGrants, sizeof(gGrants));
+    RtlZeroMemory(gCommandClientPorts, sizeof(gCommandClientPorts));
 
     status = FltRegisterFilter(DriverObject, &gRegistration, &gFilterHandle);
     if (!NT_SUCCESS(status)) {
@@ -129,7 +135,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         DgPortConnect,
         DgPortDisconnect,
         DgPortMessage,
-        2);
+        DG_MAX_COMMAND_CLIENTS + 1);
 
     FltFreeSecurityDescriptor(securityDescriptor);
 
@@ -152,6 +158,8 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
 
 static NTSTATUS DgUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
 {
+    ULONG index;
+
     UNREFERENCED_PARAMETER(Flags);
     PAGED_CODE();
 
@@ -160,15 +168,17 @@ static NTSTATUS DgUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
         gServerPort = NULL;
     }
 
-    if (gCommandClientPort != NULL && gFilterHandle != NULL) {
-        FltCloseClientPort(gFilterHandle, &gCommandClientPort);
-    }
-
-    if (gEventClientPort != NULL && gFilterHandle != NULL) {
-        FltCloseClientPort(gFilterHandle, &gEventClientPort);
-    }
-
     if (gFilterHandle != NULL) {
+        for (index = 0; index < DG_MAX_COMMAND_CLIENTS; ++index) {
+            if (gCommandClientPorts[index] != NULL) {
+                FltCloseClientPort(gFilterHandle, &gCommandClientPorts[index]);
+            }
+        }
+
+        if (gEventClientPort != NULL) {
+            FltCloseClientPort(gFilterHandle, &gEventClientPort);
+        }
+
         FltUnregisterFilter(gFilterHandle);
         gFilterHandle = NULL;
     }
@@ -315,9 +325,6 @@ static VOID DgPublishDeniedEvent(
     RtlCopyMemory(event.Path, Name->Buffer, chars * sizeof(WCHAR));
     event.Path[chars] = L'\0';
 
-    // The approval event path must never stall filesystem I/O. If the SYSTEM
-    // relay does not already have a pending FilterGetMessage request, drop the
-    // notification and keep enforcing the denial.
     timeout.QuadPart = 0;
     (VOID)FltSendMessage(
         gFilterHandle,
@@ -407,7 +414,7 @@ static NTSTATUS DgPortConnect(
     _Outptr_result_maybenull_ PVOID *ConnectionCookie)
 {
     DG_CONNECT_CONTEXT context;
-    PFLT_PORT *slot;
+    ULONG index;
 
     UNREFERENCED_PARAMETER(ServerPortCookie);
 
@@ -431,37 +438,50 @@ static NTSTATUS DgPortConnect(
         return STATUS_REVISION_MISMATCH;
     }
 
-    switch ((DG_CLIENT_ROLE)context.Role) {
-    case DgClientRoleCommand:
-        slot = &gCommandClientPort;
-        break;
-    case DgClientRoleEvent:
-        slot = &gEventClientPort;
-        break;
-    default:
-        return STATUS_INVALID_PARAMETER;
-    }
+    if (context.Role == DgClientRoleCommand) {
+        for (index = 0; index < DG_MAX_COMMAND_CLIENTS; ++index) {
+            if (InterlockedCompareExchangePointer(
+                    (PVOID volatile *)&gCommandClientPorts[index],
+                    ClientPort,
+                    NULL) == NULL) {
+                *ConnectionCookie = (PVOID)(ULONG_PTR)(DG_CONNECTION_COOKIE_COMMAND_BASE + index);
+                return STATUS_SUCCESS;
+            }
+        }
 
-    if (InterlockedCompareExchangePointer((PVOID volatile *)slot, ClientPort, NULL) != NULL) {
         return STATUS_DEVICE_BUSY;
     }
 
-    *ConnectionCookie = (PVOID)(ULONG_PTR)context.Role;
-    return STATUS_SUCCESS;
+    if (context.Role == DgClientRoleEvent) {
+        if (InterlockedCompareExchangePointer(
+                (PVOID volatile *)&gEventClientPort,
+                ClientPort,
+                NULL) != NULL) {
+            return STATUS_DEVICE_BUSY;
+        }
+
+        *ConnectionCookie = (PVOID)(ULONG_PTR)DG_CONNECTION_COOKIE_EVENT;
+        return STATUS_SUCCESS;
+    }
+
+    return STATUS_INVALID_PARAMETER;
 }
 
 static VOID DgPortDisconnect(_In_opt_ PVOID ConnectionCookie)
 {
-    ULONG role = (ULONG)(ULONG_PTR)ConnectionCookie;
+    ULONG_PTR cookie = (ULONG_PTR)ConnectionCookie;
 
     if (gFilterHandle == NULL) {
         return;
     }
 
-    if (role == DgClientRoleCommand && gCommandClientPort != NULL) {
-        FltCloseClientPort(gFilterHandle, &gCommandClientPort);
+    if (DgIsCommandCookie(cookie)) {
+        ULONG index = (ULONG)(cookie - DG_CONNECTION_COOKIE_COMMAND_BASE);
+        if (gCommandClientPorts[index] != NULL) {
+            FltCloseClientPort(gFilterHandle, &gCommandClientPorts[index]);
+        }
     }
-    else if (role == DgClientRoleEvent && gEventClientPort != NULL) {
+    else if (cookie == DG_CONNECTION_COOKIE_EVENT && gEventClientPort != NULL) {
         FltCloseClientPort(gFilterHandle, &gEventClientPort);
     }
 }
@@ -479,7 +499,7 @@ static NTSTATUS DgPortMessage(
     DG_REPLY reply = { 0 };
     const DG_COMMAND *command = &commandCopy;
 
-    if ((ULONG)(ULONG_PTR)PortCookie != DgClientRoleCommand) {
+    if (!DgIsCommandCookie((ULONG_PTR)PortCookie)) {
         return STATUS_ACCESS_DENIED;
     }
 
@@ -569,6 +589,12 @@ Complete:
 
     *ReturnOutputBufferLength = sizeof(reply);
     return STATUS_SUCCESS;
+}
+
+static BOOLEAN DgIsCommandCookie(_In_ ULONG_PTR Cookie)
+{
+    return Cookie >= DG_CONNECTION_COOKIE_COMMAND_BASE &&
+        Cookie < (DG_CONNECTION_COOKIE_COMMAND_BASE + DG_MAX_COMMAND_CLIENTS);
 }
 
 static NTSTATUS DgReadCommandPath(_In_ const DG_COMMAND *Command, _Out_ PUSHORT LengthChars)

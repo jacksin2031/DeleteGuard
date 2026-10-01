@@ -9,6 +9,7 @@ namespace DeleteGuard.EventRelay;
 
 public sealed class RelayWorker : BackgroundService
 {
+    private const string MutationMutexName = "Global\\DeleteGuard.Broker.Mutation";
     private readonly ILogger<RelayWorker> _logger;
     private readonly DeniedDeleteEventStore _eventStore;
     private readonly object _clientLock = new();
@@ -96,8 +97,26 @@ public sealed class RelayWorker : BackgroundService
 
     private void TrySyncPolicies()
     {
+        using var mutationMutex = new Mutex(initiallyOwned: false, name: MutationMutexName);
+        var acquired = false;
+
         try
         {
+            try
+            {
+                acquired = mutationMutex.WaitOne(TimeSpan.FromSeconds(5));
+            }
+            catch (AbandonedMutexException)
+            {
+                acquired = true;
+            }
+
+            if (!acquired)
+            {
+                _logger.LogInformation("Skipped policy synchronization because an administrative mutation is in progress.");
+                return;
+            }
+
             if (!FilterPortClient.TryConnect(out var commandClient) || commandClient is null)
             {
                 return;
@@ -111,6 +130,13 @@ public sealed class RelayWorker : BackgroundService
         catch (Exception exception)
         {
             _logger.LogWarning(exception, "Unable to synchronize DeleteGuard policies while reconnecting event relay.");
+        }
+        finally
+        {
+            if (acquired)
+            {
+                mutationMutex.ReleaseMutex();
+            }
         }
     }
 

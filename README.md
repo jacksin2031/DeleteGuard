@@ -2,14 +2,15 @@
 
 DeleteGuard is a Windows protection tool that makes deletion of selected NTFS folders or data volumes an **administrator-approved action**.
 
-## v0.2 architecture
+## v0.2.1 architecture
 
-DeleteGuard uses two enforcement layers:
+DeleteGuard now has three cooperating protection/UI layers:
 
-1. **NTFS ACL fallback** — inherited deny rules for `DELETE` and `DELETE_CHILD` block ordinary deletion even when the minifilter is not available.
-2. **DeleteGuardFilter.sys** — a filesystem minifilter blocks destructive delete requests at the I/O layer unless the deleting PID has a short-lived, path-scoped grant issued by the elevated broker.
+1. **NTFS ACL fallback** — inherited deny rules for `DELETE` and `DELETE_CHILD` block ordinary deletion even when the minifilter is unavailable.
+2. **DeleteGuardFilter.sys** — a filesystem minifilter blocks destructive delete requests unless the deleting PID has a short-lived, path-scoped grant.
+3. **Interactive approval pipeline** — blocked kernel events can be relayed by a LocalSystem service to an unelevated desktop Agent. If the user chooses Yes, the Agent starts the existing elevated Broker via UAC and the Broker performs the approved deletion.
 
-This closes the main v0.1 race: during an approved deletion the broker must temporarily relax the ACL, but the minifilter continues blocking every other process while allowing only the broker PID on the approved target path.
+The desktop Agent never has direct kernel command access. The Filter Manager communication port remains restricted to administrators/SYSTEM.
 
 ## Behaviour
 
@@ -24,11 +25,17 @@ Remove-Item D:\Projects\Important -Recurse -Force
 cmd /c rmdir /s /q D:\Projects\Important
 # Explorer deletion is also denied.
 
-# UAC-approved deletion
+# Explicit UAC-approved deletion
 deleteguard delete D:\Projects\Important\old-build
 ```
 
-When the minifilter is active, `deleteguard delete` performs this sequence:
+When the v0.2.1 Event Relay and Agent are also running, an arbitrary blocked delete can additionally produce a desktop approval prompt. The original delete request is still denied immediately. If approved, DeleteGuard performs a separate elevated deletion through the Broker.
+
+This **deny-then-approved-delete** model intentionally avoids holding filesystem I/O open while waiting for desktop UI or UAC.
+
+## Approved deletion sequence
+
+When the minifilter is active, the Broker performs:
 
 ```text
 sync protected roots
@@ -39,13 +46,7 @@ sync protected roots
 -> restore/sync protection
 ```
 
-If the driver is absent, the v0.1 ACL path remains functional. If the driver is present but rejects policy synchronization or a grant, DeleteGuard fails closed and does not relax the ACL.
-
-### Current UX boundary
-
-An arbitrary failing `Remove-Item` or Explorer delete is currently **denied**; it does not yet automatically open a UAC prompt. `deleteguard delete <path>` is the approval path.
-
-The next UI layer will turn denied kernel events into an interactive approval request. The kernel driver itself will never display UI.
+If the driver is absent, the ACL path remains functional. If the driver is present but rejects policy synchronization or a grant, DeleteGuard fails closed and does not relax the ACL.
 
 ## Commands
 
@@ -61,7 +62,7 @@ deleteguard doctor
 
 Protecting the Windows system-volume root is refused. Protecting a non-system NTFS volume root requires the explicit `--allow-volume-root` option.
 
-## Kernel operations covered in v0.2
+## Kernel operations covered
 
 The minifilter currently gates:
 
@@ -91,6 +92,8 @@ Output:
 ```text
 artifacts\win-x64
 ```
+
+The package contains the CLI, elevated Broker, Event Relay service, and desktop Agent.
 
 ## Build minifilter
 
@@ -122,11 +125,23 @@ Open a new terminal and verify:
 deleteguard doctor
 ```
 
-Driver installation is intentionally not automated in the normal installer while v0.2 remains a development minifilter requiring test/production signing and a production altitude.
+To install the v0.2.1 Event Relay service:
+
+```powershell
+.\scripts\install-approval.ps1
+```
+
+Then run this once as the desktop user who should receive approval prompts:
+
+```powershell
+.\scripts\enable-agent.ps1
+```
+
+Driver installation is intentionally not automated while the minifilter remains a development driver requiring test/production signing and a production altitude.
 
 ## Safe first test
 
-Use a disposable folder, not important data:
+Use a disposable VM/folder, not important data:
 
 ```powershell
 mkdir C:\DeleteGuard-Test
@@ -145,10 +160,14 @@ deleteguard unprotect C:\DeleteGuard-Test
 ```text
 %ProgramData%\DeleteGuard\policies.json
 %ProgramData%\DeleteGuard\audit.jsonl
+%ProgramData%\DeleteGuard\denied-events.jsonl
+%ProgramData%\DeleteGuard\denied-events.1.jsonl
 ```
+
+The denied-event stream rotates at 4 MiB and retains one previous file.
 
 ## Security scope
 
 DeleteGuard is designed to prevent accidental or unauthorized destructive file operations on configured paths. It is not a backup and does not protect against raw disk writes, partition deletion, formatting, offline attacks, filesystem corruption or physical device failure.
 
-See [SECURITY.md](SECURITY.md), [docs/MINIFILTER.md](docs/MINIFILTER.md), and [docs/ROADMAP.md](docs/ROADMAP.md).
+See [SECURITY.md](SECURITY.md), [docs/MINIFILTER.md](docs/MINIFILTER.md), [docs/INTERACTIVE_APPROVAL.md](docs/INTERACTIVE_APPROVAL.md), and [docs/ROADMAP.md](docs/ROADMAP.md).
