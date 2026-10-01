@@ -23,10 +23,17 @@ foreach ($path in @($sys, $inf)) {
     if (-not (Test-Path -LiteralPath $path)) { throw "Missing driver package file: $path" }
 }
 
-$cert = Get-ChildItem Cert:\LocalMachine\My |
-    Where-Object { $_.Subject -eq $CertificateSubject -and $_.NotAfter -gt (Get-Date).AddDays(1) } |
-    Sort-Object NotAfter -Descending |
-    Select-Object -First 1
+$marker = Get-Content -LiteralPath $script:DeleteGuardTestVmMarker -Raw | ConvertFrom-Json
+$cert = $null
+if ($marker.PSObject.Properties.Name -contains 'testCertificateThumbprint') {
+    $recordedThumbprint = [string]$marker.testCertificateThumbprint
+    if ($recordedThumbprint) {
+        $cert = Get-Item -LiteralPath "Cert:\LocalMachine\My\$recordedThumbprint" -ErrorAction SilentlyContinue
+        if ($cert -and ($cert.NotAfter -le (Get-Date).AddDays(1))) {
+            $cert = $null
+        }
+    }
+}
 
 if (-not $cert) {
     $cert = New-SelfSignedCertificate `
@@ -36,8 +43,17 @@ if (-not $cert) {
         -KeyAlgorithm RSA `
         -KeyLength 3072 `
         -HashAlgorithm SHA256 `
+        -KeyExportPolicy NonExportable `
         -NotAfter (Get-Date).AddDays(30)
 }
+
+if ($marker.PSObject.Properties.Name -contains 'testCertificateThumbprint') {
+    $marker.testCertificateThumbprint = $cert.Thumbprint
+}
+else {
+    $marker | Add-Member -NotePropertyName testCertificateThumbprint -NotePropertyValue $cert.Thumbprint
+}
+$marker | ConvertTo-Json | Set-Content -LiteralPath $script:DeleteGuardTestVmMarker -Encoding UTF8
 
 $cer = Join-Path $package 'DeleteGuard-TestVM.cer'
 Export-Certificate -Cert $cert -FilePath $cer -Force | Out-Null
@@ -71,4 +87,5 @@ if ($LASTEXITCODE -ne 0) { throw 'Catalog/INF verification failed.' }
 
 Write-Host 'DeleteGuard test-signed driver package is ready:'
 Write-Host "  $package"
-Write-Host 'The private key remains in this disposable VM LocalMachine certificate store and is not exported.'
+Write-Host "Test certificate thumbprint recorded in VM marker: $($cert.Thumbprint)"
+Write-Host 'The private key is non-exportable and remains in this disposable VM LocalMachine certificate store.'
