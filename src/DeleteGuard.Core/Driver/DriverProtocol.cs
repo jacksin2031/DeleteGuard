@@ -20,13 +20,16 @@ public enum DriverCommandType : uint
 
 public enum DriverEventType : uint
 {
-    DeleteDenied = 1
+    DeleteDenied = 1,
+    RenameDenied = 2
 }
 
 public enum DriverDeleteOperation : uint
 {
     Disposition = 1,
-    DeleteOnClose = 2
+    DeleteOnClose = 2,
+    MoveOut = 3,
+    ReplaceProtectedDestination = 4
 }
 
 public static class DriverProtocol
