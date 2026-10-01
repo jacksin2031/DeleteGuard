@@ -22,6 +22,12 @@ Use this checklist together with `docs/RUNTIME-VALIDATION.md`.
 - [ ] Win32 `FileDispositionInfo` denied
 - [ ] Win32 delete-on-close denied
 - [ ] recursive directory deletion denied
+- [ ] protected source cannot move from `C:\DeleteGuard-VMTest\protected` to the unprotected sibling
+- [ ] denied move-out leaves source intact and does not create destination
+- [ ] overwrite/replace rename from unprotected sibling cannot replace a protected destination
+- [ ] denied protected-destination replacement leaves both source and destination intact
+- [ ] Event Relay records `MoveOut` and `ReplaceProtectedDestination` operation values
+- [ ] both rename denial events are `canApprove: false`
 - [ ] enforcement survives Event Relay outage
 - [ ] repeated denied-delete stress leaves sentinel intact
 - [ ] approved recursive Broker deletion succeeds
@@ -40,6 +46,9 @@ Use this checklist together with `docs/RUNTIME-VALIDATION.md`.
 - [ ] UAC cancellation leaves target intact
 - [ ] Agent **Yes** + UAC approval deletes only the displayed target
 - [ ] non-elevated PowerShell attempt follows the same prompt/UAC flow
+- [ ] Explorer move-out of a protected file is denied
+- [ ] blocked move-out shows a rename warning, not a delete-approval modal
+- [ ] rename denial never launches `DeleteGuard.Broker.exe`
 - [ ] duplicate rapid attempts do not create an unusable prompt storm
 - [ ] rapid **unique-path** denied deletes produce no more than 3 automatic modal approval prompts within 30 seconds
 - [ ] additional flood events remain denied and are not replayed later as fresh prompts
@@ -54,6 +63,8 @@ Use this checklist together with `docs/RUNTIME-VALIDATION.md`.
 - [ ] no Event Relay reconnect hang
 - [ ] no leaked/stuck protected policy after test cleanup
 - [ ] no unexpected file deletion during race/stress cases
+- [ ] no protected source escapes through rename/move-out
+- [ ] no protected destination is changed through replace rename
 
 ## Evidence to retain
 
