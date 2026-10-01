@@ -24,7 +24,8 @@ typedef enum _DG_COMMAND_TYPE {
 
 typedef enum _DG_EVENT_TYPE {
     DgEventDeleteDenied = 1,
-    DgEventRenameDenied = 2
+    DgEventRenameDenied = 2,
+    DgEventHardLinkDenied = 3
 } DG_EVENT_TYPE;
 
 typedef enum _DG_DELETE_OPERATION {
@@ -32,7 +33,9 @@ typedef enum _DG_DELETE_OPERATION {
     DgDeleteOperationDeleteOnClose = 2,
     DgDeleteOperationMoveOut = 3,
     DgDeleteOperationReplaceProtectedDestination = 4,
-    DgDeleteOperationRenameProtectedAncestor = 5
+    DgDeleteOperationRenameProtectedAncestor = 5,
+    DgDeleteOperationHardLinkOut = 6,
+    DgDeleteOperationReplaceProtectedLinkDestination = 7
 } DG_DELETE_OPERATION;
 
 typedef struct _DG_CONNECT_CONTEXT {
