@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
+using DeleteGuard.Core.Driver;
 using DeleteGuard.Core.Models;
 using DeleteGuard.Core.Services;
 
@@ -39,6 +40,7 @@ internal sealed class ApprovalContext : ApplicationContext
     private bool _polling;
     private DateTimeOffset _lastThrottleNoticeUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastUnmappableNoticeUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastNamespaceNoticeUtc = DateTimeOffset.MinValue;
 
     public ApprovalContext()
     {
@@ -107,7 +109,14 @@ internal sealed class ApprovalContext : ApplicationContext
 
                 if (!record.CanApprove)
                 {
-                    ShowUnmappableNotice(record, decisionTime);
+                    if (record.Operation == DriverDeleteOperation.NamespaceMutation)
+                    {
+                        ShowNamespaceMutationNotice(record, decisionTime);
+                    }
+                    else
+                    {
+                        ShowUnmappableNotice(record, decisionTime);
+                    }
                     continue;
                 }
 
@@ -134,6 +143,21 @@ internal sealed class ApprovalContext : ApplicationContext
             _polling = false;
             _timer.Start();
         }
+    }
+
+    private void ShowNamespaceMutationNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
+    {
+        if (now - _lastNamespaceNoticeUtc < TimeSpan.FromSeconds(15))
+        {
+            return;
+        }
+
+        _lastNamespaceNoticeUtc = now;
+        _notifyIcon.ShowBalloonTip(
+            6000,
+            "DeleteGuard blocked a protected rename/move",
+            $"A rename, move-out, or replacement affecting protected data was denied: {record.TargetPath}. Namespace changes are not auto-approvable in this prototype.",
+            ToolTipIcon.Warning);
     }
 
     private void ShowUnmappableNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
