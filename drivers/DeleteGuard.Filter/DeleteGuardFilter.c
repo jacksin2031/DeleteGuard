@@ -381,8 +381,9 @@ static NTSTATUS DgPortMessage(
     _Out_ PULONG ReturnOutputBufferLength)
 {
     NTSTATUS status = STATUS_INVALID_PARAMETER;
+    DG_COMMAND commandCopy;
     DG_REPLY reply = { 0 };
-    PDG_COMMAND command;
+    const DG_COMMAND *command = &commandCopy;
 
     UNREFERENCED_PARAMETER(PortCookie);
 
@@ -395,7 +396,28 @@ static NTSTATUS DgPortMessage(
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    command = (PDG_COMMAND)InputBuffer;
+    if (((ULONG_PTR)InputBuffer % TYPE_ALIGNMENT(DG_COMMAND)) != 0) {
+        return STATUS_DATATYPE_MISALIGNMENT;
+    }
+
+    if (OutputBuffer == NULL || OutputBufferLength < sizeof(DG_REPLY)) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    if (((ULONG_PTR)OutputBuffer % TYPE_ALIGNMENT(DG_REPLY)) != 0) {
+        return STATUS_DATATYPE_MISALIGNMENT;
+    }
+
+    // FltMgr probes user buffers but the pointers are still unlocked user-mode
+    // addresses. Copy them under SEH before dereferencing, as required for a
+    // PFLT_MESSAGE_NOTIFY callback.
+    __try {
+        RtlCopyMemory(&commandCopy, InputBuffer, sizeof(commandCopy));
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
+    }
+
     if (command->Version != DG_PROTOCOL_VERSION) {
         status = STATUS_REVISION_MISMATCH;
         goto Complete;
@@ -445,11 +467,14 @@ Complete:
     ExReleasePushLockShared(&gStateLock);
     KeLeaveCriticalRegion();
 
-    if (OutputBuffer != NULL && OutputBufferLength >= sizeof(reply)) {
+    __try {
         RtlCopyMemory(OutputBuffer, &reply, sizeof(reply));
-        *ReturnOutputBufferLength = sizeof(reply);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
     }
 
+    *ReturnOutputBufferLength = sizeof(reply);
     return STATUS_SUCCESS;
 }
 
