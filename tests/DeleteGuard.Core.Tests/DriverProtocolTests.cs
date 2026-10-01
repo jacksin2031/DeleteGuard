@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using DeleteGuard.Core.Driver;
+using Xunit;
 
 namespace DeleteGuard.Core.Tests;
 
