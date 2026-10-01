@@ -1,4 +1,5 @@
 using System.Security.Principal;
+using DeleteGuard.Core.Driver;
 using DeleteGuard.Core.Security;
 using DeleteGuard.Core.Services;
 
@@ -115,13 +116,50 @@ internal static class Program
 
     private static int Doctor()
     {
-        Console.WriteLine($"Windows:        {OperatingSystem.IsWindows()}");
-        Console.WriteLine($"Elevated:       {IsElevated()}");
-        Console.WriteLine($"Broker:         {BrokerLauncher.ResolveBrokerPath()}");
-        Console.WriteLine($"Broker exists:  {File.Exists(BrokerLauncher.ResolveBrokerPath())}");
+        var windows = OperatingSystem.IsWindows();
+        var elevated = IsElevated();
+        var brokerPath = BrokerLauncher.ResolveBrokerPath();
+        var brokerExists = File.Exists(brokerPath);
+
+        Console.WriteLine($"Windows:        {windows}");
+        Console.WriteLine($"Elevated:       {elevated}");
+        Console.WriteLine($"Broker:         {brokerPath}");
+        Console.WriteLine($"Broker exists:  {brokerExists}");
         Console.WriteLine($"Policy store:   {new PolicyStore().PolicyFile}");
-        Console.WriteLine("Protection:     NTFS ACL MVP (DENY DELETE + DELETE_CHILD)");
-        return OperatingSystem.IsWindows() && File.Exists(BrokerLauncher.ResolveBrokerPath()) ? 0 : 3;
+        Console.WriteLine("ACL fallback:   DENY DELETE + DELETE_CHILD");
+        Console.WriteLine($"Minifilter:     {ProbeMinifilter(windows, elevated)}");
+        return windows && brokerExists ? 0 : 3;
+    }
+
+    private static string ProbeMinifilter(bool windows, bool elevated)
+    {
+        if (!windows)
+        {
+            return "not applicable";
+        }
+
+        if (!elevated)
+        {
+            return "not probed (communication port is administrator/SYSTEM only; run doctor elevated)";
+        }
+
+        if (!FilterPortClient.TryConnect(out var driver) || driver is null)
+        {
+            return "unavailable (not installed/running or communication port unavailable)";
+        }
+
+        using (driver)
+        {
+            try
+            {
+                var reply = driver.Ping();
+                return $"active (protocol={DriverProtocol.Version}, roots={reply.RootCount})";
+            }
+            catch (Exception exception)
+            {
+                return $"error({exception.GetType().Name}: {exception.Message})";
+            }
+        }
     }
 
     private static int Version()
@@ -164,7 +202,7 @@ internal static class Program
 
     private static void PrintHelp()
     {
-        Console.WriteLine("DeleteGuard MVP - administrator-gated deletion protection for NTFS paths");
+        Console.WriteLine("DeleteGuard v0.2 - administrator-gated deletion protection for NTFS paths");
         Console.WriteLine();
         Console.WriteLine("Usage:");
         Console.WriteLine("  deleteguard protect <path> [--allow-volume-root]");
@@ -175,7 +213,8 @@ internal static class Program
         Console.WriteLine("  deleteguard audit [count]");
         Console.WriteLine("  deleteguard doctor");
         Console.WriteLine();
-        Console.WriteLine("Ordinary Explorer/cmd/PowerShell/app deletion attempts are denied by NTFS ACL.");
-        Console.WriteLine("Use 'deleteguard delete' to request a UAC-approved one-time deletion.");
+        Console.WriteLine("Ordinary Explorer/cmd/PowerShell/app deletion attempts are denied by the ACL fallback");
+        Console.WriteLine("and, when installed/running, by the DeleteGuard filesystem minifilter.");
+        Console.WriteLine("Use 'deleteguard delete' to request a UAC-approved scoped deletion grant.");
     }
 }

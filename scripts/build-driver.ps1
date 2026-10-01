@@ -53,10 +53,15 @@ if (-not (Test-Path $vswhere)) {
     throw 'vswhere.exe was not found. Install Visual Studio 2022 Build Tools with Desktop development with C++.'
 }
 
-$msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+# Use 64-bit MSBuild. The x64 WDK NuGet package contains the x64 InfVerif and
+# ApiValidator host tools; 32-bit MSBuild selects the x86 validator path and the
+# validation phase fails even after the driver itself compiles and links.
+$msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' |
+    Select-Object -First 1
 if (-not $msbuild) {
-    throw 'MSBuild.exe was not found.'
+    throw '64-bit MSBuild.exe was not found. Install a current Visual Studio 2022 Build Tools/Enterprise C++ workload.'
 }
+Write-Host "MSBuild x64: $msbuild"
 
 & $msbuild $project /m /restore /p:Configuration=$Configuration /p:Platform=x64 /p:SignMode=Off /p:Inf2CatUseLocalTime=true
 if ($LASTEXITCODE -ne 0) { throw "Driver build failed with exit code $LASTEXITCODE." }
