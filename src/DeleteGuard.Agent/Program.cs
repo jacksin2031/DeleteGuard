@@ -86,7 +86,6 @@ internal sealed class ApprovalContext : ApplicationContext
 
         try
         {
-            var now = DateTimeOffset.UtcNow;
             foreach (var record in _store.ReadLast(100).OrderBy(record => record.ObservedUtc))
             {
                 // Mark an event known before any filtering so a throttled or stale event
@@ -96,7 +95,11 @@ internal sealed class ApprovalContext : ApplicationContext
                     continue;
                 }
 
-                if (now - record.ObservedUtc > TimeSpan.FromSeconds(20))
+                // A modal prompt can keep this loop blocked for an arbitrary time.
+                // Re-read the clock for every event so the freshness and rate-limit
+                // decisions reflect the actual time at which UI would be shown.
+                var decisionTime = DateTimeOffset.UtcNow;
+                if (decisionTime - record.ObservedUtc > TimeSpan.FromSeconds(20))
                 {
                     continue;
                 }
@@ -111,9 +114,9 @@ internal sealed class ApprovalContext : ApplicationContext
                     continue;
                 }
 
-                if (!_promptLimiter.TryAcquire(now))
+                if (!_promptLimiter.TryAcquire(decisionTime))
                 {
-                    ShowThrottleNotice(now);
+                    ShowThrottleNotice(decisionTime);
                     continue;
                 }
 
