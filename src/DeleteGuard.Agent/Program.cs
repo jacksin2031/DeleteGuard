@@ -38,6 +38,7 @@ internal sealed class ApprovalContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _timer;
     private bool _polling;
     private DateTimeOffset _lastThrottleNoticeUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastUnmappableNoticeUtc = DateTimeOffset.MinValue;
 
     public ApprovalContext()
     {
@@ -106,11 +107,7 @@ internal sealed class ApprovalContext : ApplicationContext
 
                 if (!record.CanApprove)
                 {
-                    _notifyIcon.ShowBalloonTip(
-                        5000,
-                        "DeleteGuard blocked a deletion",
-                        $"A protected delete was denied, but its NT path could not be mapped to a drive-letter path: {record.NtPath}",
-                        ToolTipIcon.Warning);
+                    ShowUnmappableNotice(record, decisionTime);
                     continue;
                 }
 
@@ -137,6 +134,21 @@ internal sealed class ApprovalContext : ApplicationContext
             _polling = false;
             _timer.Start();
         }
+    }
+
+    private void ShowUnmappableNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
+    {
+        if (now - _lastUnmappableNoticeUtc < TimeSpan.FromSeconds(15))
+        {
+            return;
+        }
+
+        _lastUnmappableNoticeUtc = now;
+        _notifyIcon.ShowBalloonTip(
+            5000,
+            "DeleteGuard blocked a deletion",
+            $"A protected delete was denied, but its NT path could not be mapped to a drive-letter path: {record.NtPath}",
+            ToolTipIcon.Warning);
     }
 
     private void ShowThrottleNotice(DateTimeOffset now)
