@@ -20,21 +20,34 @@ public sealed class FilterPortClient : IDisposable
             return false;
         }
 
-        var hr = FilterConnectCommunicationPort(
-            DriverProtocol.PortName,
-            0,
-            IntPtr.Zero,
-            0,
-            IntPtr.Zero,
-            out var port);
+        var context = DriverConnectContext.Create(DriverClientRole.Command);
+        var contextSize = Marshal.SizeOf<DriverConnectContext>();
+        var contextBuffer = Marshal.AllocHGlobal(contextSize);
 
-        if (hr < 0 || port == IntPtr.Zero || port == new IntPtr(-1))
+        try
         {
-            return false;
-        }
+            Marshal.StructureToPtr(context, contextBuffer, fDeleteOld: false);
+            var hr = FilterConnectCommunicationPort(
+                DriverProtocol.PortName,
+                0,
+                contextBuffer,
+                checked((ushort)contextSize),
+                IntPtr.Zero,
+                out var port);
 
-        client = new FilterPortClient(port);
-        return true;
+            if (hr < 0 || port == IntPtr.Zero || port == new IntPtr(-1))
+            {
+                return false;
+            }
+
+            client = new FilterPortClient(port);
+            return true;
+        }
+        finally
+        {
+            Marshal.DestroyStructure<DriverConnectContext>(contextBuffer);
+            Marshal.FreeHGlobal(contextBuffer);
+        }
     }
 
     public DriverReply Ping() => Send(DriverCommand.Create(DriverCommandType.Ping));
@@ -49,7 +62,7 @@ public sealed class FilterPortClient : IDisposable
             count++;
             if (count > 64)
             {
-                throw new InvalidOperationException("DeleteGuard minifilter supports at most 64 active roots in v0.2.");
+                throw new InvalidOperationException("DeleteGuard minifilter supports at most 64 active roots.");
             }
 
             var ntPath = NtPathConverter.ToNtPath(policy.RootPath);

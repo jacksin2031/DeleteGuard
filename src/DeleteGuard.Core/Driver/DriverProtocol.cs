@@ -2,6 +2,12 @@ using System.Runtime.InteropServices;
 
 namespace DeleteGuard.Core.Driver;
 
+public enum DriverClientRole : uint
+{
+    Command = 1,
+    Event = 2
+}
+
 public enum DriverCommandType : uint
 {
     Ping = 0,
@@ -12,15 +18,44 @@ public enum DriverCommandType : uint
     Revoke = 5
 }
 
+public enum DriverEventType : uint
+{
+    DeleteDenied = 1
+}
+
+public enum DriverDeleteOperation : uint
+{
+    Disposition = 1,
+    DeleteOnClose = 2
+}
+
 public static class DriverProtocol
 {
-    public const uint Version = 2;
+    public const uint Version = 3;
     public const int MaxPathChars = 520;
     public const string PortName = @"\DeleteGuardPort";
     public const uint MaxGrantTtlMilliseconds = 30_000;
+    public const uint SynchronousPortFlag = 0x00000001;
 
+    public static int ConnectContextSize => Marshal.SizeOf<DriverConnectContext>();
     public static int CommandSize => Marshal.SizeOf<DriverCommand>();
     public static int ReplySize => Marshal.SizeOf<DriverReply>();
+    public static int EventSize => Marshal.SizeOf<DriverEvent>();
+    public static int FilterMessageHeaderSize => Marshal.SizeOf<FilterMessageHeader>();
+    public static int EventEnvelopeSize => checked(FilterMessageHeaderSize + EventSize);
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct DriverConnectContext
+{
+    public uint Version;
+    public DriverClientRole Role;
+
+    public static DriverConnectContext Create(DriverClientRole role) => new()
+    {
+        Version = DriverProtocol.Version,
+        Role = role
+    };
 }
 
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -62,4 +97,24 @@ public struct DriverReply
 {
     public int Status;
     public uint RootCount;
+}
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+public struct DriverEvent
+{
+    public uint Version;
+    public DriverEventType Type;
+    public uint ProcessId;
+    public DriverDeleteOperation Operation;
+    public ulong Sequence;
+
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = DriverProtocol.MaxPathChars)]
+    public string Path;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct FilterMessageHeader
+{
+    public uint ReplyLength;
+    public ulong MessageId;
 }

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, feature/mvp, feature/minifilter-v0.2]
+    branches: [main, feature/mvp, feature/minifilter-v0.2, feature/interactive-approval-v0.2.1]
   pull_request:
 
 permissions:

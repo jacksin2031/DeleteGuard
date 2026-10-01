@@ -15,10 +15,16 @@ New-Item -ItemType Directory -Path $out -Force | Out-Null
 dotnet restore (Join-Path $repo 'DeleteGuard.sln')
 dotnet build (Join-Path $repo 'DeleteGuard.sln') -c $Configuration --no-restore
 
-dotnet publish (Join-Path $repo 'src\DeleteGuard.Cli\DeleteGuard.Cli.csproj') `
-    -c $Configuration -r $Runtime --self-contained false -o $out
+$projects = @(
+    'src\DeleteGuard.Cli\DeleteGuard.Cli.csproj',
+    'src\DeleteGuard.Broker\DeleteGuard.Broker.csproj',
+    'src\DeleteGuard.EventRelay\DeleteGuard.EventRelay.csproj',
+    'src\DeleteGuard.Agent\DeleteGuard.Agent.csproj'
+)
 
-dotnet publish (Join-Path $repo 'src\DeleteGuard.Broker\DeleteGuard.Broker.csproj') `
-    -c $Configuration -r $Runtime --self-contained false -o $out
+foreach ($project in $projects) {
+    dotnet publish (Join-Path $repo $project) `
+        -c $Configuration -r $Runtime --self-contained false -o $out
+}
 
 Write-Host "DeleteGuard package: $out"

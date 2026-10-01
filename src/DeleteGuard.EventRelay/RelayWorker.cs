@@ -1,0 +1,170 @@
+using System.Diagnostics;
+using DeleteGuard.Core.Driver;
+using DeleteGuard.Core.Models;
+using DeleteGuard.Core.Services;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+namespace DeleteGuard.EventRelay;
+
+public sealed class RelayWorker : BackgroundService
+{
+    private readonly ILogger<RelayWorker> _logger;
+    private readonly DeniedDeleteEventStore _eventStore;
+    private readonly object _clientLock = new();
+    private readonly Dictionary<string, DateTimeOffset> _recent = new(StringComparer.OrdinalIgnoreCase);
+    private FilterEventClient? _eventClient;
+
+    public RelayWorker(ILogger<RelayWorker> logger, DeniedDeleteEventStore eventStore)
+    {
+        _logger = logger;
+        _eventStore = eventStore;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await Task.Yield();
+        RuntimePaths.EnsureSecureDataDirectory(RuntimePaths.DefaultDataDirectory);
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                TrySyncPolicies();
+
+                if (!FilterEventClient.TryConnect(out var client) || client is null)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+                    continue;
+                }
+
+                lock (_clientLock)
+                {
+                    _eventClient = client;
+                }
+
+                _logger.LogInformation("Connected to DeleteGuard minifilter event channel.");
+
+                using (client)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var driverEvent = client.ReadNext();
+                        Persist(driverEvent);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception exception)
+            {
+                if (!stoppingToken.IsCancellationRequested)
+                {
+                    _logger.LogWarning(exception, "DeleteGuard event relay disconnected; retrying.");
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                lock (_clientLock)
+                {
+                    _eventClient = null;
+                }
+            }
+        }
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        lock (_clientLock)
+        {
+            _eventClient?.Dispose();
+            _eventClient = null;
+        }
+
+        await base.StopAsync(cancellationToken);
+    }
+
+    private void TrySyncPolicies()
+    {
+        try
+        {
+            if (!FilterPortClient.TryConnect(out var commandClient) || commandClient is null)
+            {
+                return;
+            }
+
+            using (commandClient)
+            {
+                commandClient.SyncPolicies(new PolicyStore().Load());
+            }
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "Unable to synchronize DeleteGuard policies while reconnecting event relay.");
+        }
+    }
+
+    private void Persist(DriverEvent driverEvent)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var key = $"{driverEvent.ProcessId}|{(uint)driverEvent.Operation}|{driverEvent.Path}";
+
+        if (_recent.TryGetValue(key, out var previous) && now - previous < TimeSpan.FromSeconds(2))
+        {
+            return;
+        }
+
+        _recent[key] = now;
+        if (_recent.Count > 512)
+        {
+            foreach (var stale in _recent.Where(pair => now - pair.Value > TimeSpan.FromSeconds(30)).Select(pair => pair.Key).ToArray())
+            {
+                _recent.Remove(stale);
+            }
+        }
+
+        var canApprove = NtPathConverter.TryFromNtPath(driverEvent.Path, out var targetPath);
+        var record = new DeniedDeleteEventRecord
+        {
+            EventId = Guid.NewGuid(),
+            ObservedUtc = now,
+            DriverSequence = driverEvent.Sequence,
+            ProcessId = driverEvent.ProcessId,
+            ProcessName = TryGetProcessName(driverEvent.ProcessId),
+            Operation = driverEvent.Operation,
+            NtPath = driverEvent.Path,
+            TargetPath = canApprove ? targetPath : driverEvent.Path,
+            CanApprove = canApprove
+        };
+
+        _eventStore.Append(record);
+        _logger.LogInformation(
+            "Recorded denied delete event {EventId} pid={ProcessId} path={Path}",
+            record.EventId,
+            record.ProcessId,
+            record.TargetPath);
+    }
+
+    private static string? TryGetProcessName(uint processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(checked((int)processId));
+            return process.ProcessName;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+}
