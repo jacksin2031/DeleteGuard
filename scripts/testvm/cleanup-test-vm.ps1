@@ -10,6 +10,7 @@ Assert-DeleteGuardAdministrator
 Assert-DeleteGuardDisposableVm
 
 $repo = Get-DeleteGuardRepoRoot
+$marker = Get-Content -LiteralPath $script:DeleteGuardTestVmMarker -Raw | ConvertFrom-Json
 
 try { & (Join-Path $repo 'scripts\disable-agent.ps1') | Out-Host } catch { Write-Warning $_.Exception.Message }
 try { & (Join-Path $repo 'scripts\uninstall-approval.ps1') | Out-Host } catch { Write-Warning $_.Exception.Message }
@@ -39,13 +40,22 @@ if ($service) {
     if ($LASTEXITCODE -ne 0) { Write-Warning "sc delete DeleteGuardFilter returned exit code $LASTEXITCODE." }
 }
 
-$testCerts = Get-ChildItem Cert:\LocalMachine\My |
-    Where-Object { $_.Subject -eq 'CN=DeleteGuard Test VM' }
-foreach ($cert in $testCerts) {
-    $thumbprint = $cert.Thumbprint
-    Remove-Item -LiteralPath "Cert:\LocalMachine\My\$thumbprint" -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath "Cert:\LocalMachine\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath "Cert:\LocalMachine\TrustedPublisher\$thumbprint" -Force -ErrorAction SilentlyContinue
+$thumbprint = $null
+if ($marker.PSObject.Properties.Name -contains 'testCertificateThumbprint') {
+    $thumbprint = [string]$marker.testCertificateThumbprint
+}
+
+if ($thumbprint) {
+    foreach ($store in @('My', 'Root', 'TrustedPublisher')) {
+        $certificatePath = "Cert:\LocalMachine\$store\$thumbprint"
+        if (Test-Path -LiteralPath $certificatePath) {
+            Remove-Item -LiteralPath $certificatePath -Force
+        }
+    }
+    Write-Host "Removed marker-bound DeleteGuard test certificate: $thumbprint"
+}
+else {
+    Write-Warning 'The disposable-VM marker does not contain a test certificate thumbprint; no certificate was removed by subject/name guessing.'
 }
 
 if ($DisableTestSigning) {
