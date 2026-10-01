@@ -32,6 +32,41 @@ function Assert-DeleteGuardDisposableVm {
     }
 }
 
+function Assert-DeleteGuardNoReparseComponents {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Candidate
+    )
+
+    $current = $Root
+    if (Test-Path -LiteralPath $current) {
+        $rootItem = Get-Item -LiteralPath $current -Force
+        if (-not $rootItem.PSIsContainer) {
+            throw "DeleteGuard test root exists but is not a directory: $current"
+        }
+        if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Refusing destructive test because the test root is a reparse point: $current"
+        }
+    }
+
+    if ($Candidate.Equals($Root, [StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    $relative = $Candidate.Substring($Root.Length).TrimStart('\')
+    foreach ($segment in @($relative -split '\\' | Where-Object { $_ })) {
+        $current = Join-Path $current $segment
+        if (-not (Test-Path -LiteralPath $current)) {
+            continue
+        }
+
+        $item = Get-Item -LiteralPath $current -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Refusing destructive test through a reparse point: $current"
+        }
+    }
+}
+
 function Assert-DeleteGuardSafeTestPath {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -42,6 +77,8 @@ function Assert-DeleteGuardSafeTestPath {
         -not $candidate.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing destructive test outside $root : $candidate"
     }
+
+    Assert-DeleteGuardNoReparseComponents -Root $root -Candidate $candidate
 }
 
 function Get-DeleteGuardInstalledDirectory {
