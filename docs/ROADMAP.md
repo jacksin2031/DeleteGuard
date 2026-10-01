@@ -15,7 +15,7 @@ Implemented in the v0.2 development branch:
 
 - Intercept delete disposition (`FileDispositionInformation` / `FileDispositionInformationEx`).
 - Intercept `FILE_DELETE_ON_CLOSE`.
-- Broker-to-driver grants scoped to process ID, target path and short TTL.
+- Broker-to-driver grants scoped to process identity, target path and short TTL.
 - Preserve v0.1 ACL as a fallback layer.
 - Close the normal approved-delete ACL-removal race by keeping unrelated processes blocked in the minifilter.
 - Pinned WDK/SDK CI build, Universal ApiValidator, Inf2Cat and unsigned driver artifact.
@@ -25,7 +25,6 @@ Still required before v0.2 can be treated as production-ready:
 - Microsoft-assigned production minifilter altitude.
 - Production driver signing path.
 - Loaded-driver VM evidence under Driver Verifier and stress/race testing.
-- Destructive rename/move-out interception or an explicitly accepted scope boundary.
 - Driver/service health and recovery hardening.
 
 ## v0.2.1 interactive approval UX — build-verified prototype
@@ -44,7 +43,6 @@ Implemented:
 Still required:
 
 - Loaded-driver desktop-session validation of Explorer/Agent/UAC behavior.
-- Process identity hardening beyond PID/name for future hostile-local-process threat models.
 - UX polish, localization and richer operation/process presentation.
 
 ## v0.2.2 runtime validation gate — harness implemented
@@ -63,7 +61,37 @@ Implemented in `scripts/testvm` and `docs/RUNTIME-VALIDATION.md`:
 - machine-readable runtime acceptance report;
 - guarded cleanup.
 
-Release gate remaining: execute the harness in an actual disposable Windows 11 VM, retain the report/dumps/verifier evidence, and resolve any runtime findings before making PR #3 ready for review.
+## v0.2.3 approval-flood hardening — build/unit-test verified
+
+Implemented:
+
+- Relay recent-event state is bounded even under unique-path floods;
+- automatic modal prompts are limited to 3 per rolling 30 seconds;
+- suppressed/stale events are not replayed later as fresh approval opportunities;
+- throttle/unmappable warning notifications are rate-limited;
+- enforcement remains kernel/ACL fail-closed when UI is throttled.
+
+## v0.2.4 process-identity grants — build-verified
+
+Implemented:
+
+- kernel grants bind PID plus `PsGetProcessStartKey`, target path and expiry;
+- request identity uses `FltGetRequestorProcessId` + `FltGetRequestorProcess`;
+- a PID reused after Broker termination cannot inherit the remaining short-lived grant;
+- no long-lived `EPROCESS` reference is retained.
+
+## v0.2.5 rename boundary — implementation in validation
+
+Implemented on the stacked development branch:
+
+- intercept `FileRenameInformation` and `FileRenameInformationEx`;
+- resolve destination paths with `FltGetDestinationFileNameInformation`;
+- allow protected-source renames only when the destination remains under the same protected root;
+- fail closed when a protected source has an invalid/unresolvable rename destination;
+- emit `RenameOut` denial events without converting them into delete approval/UAC prompts;
+- extend the disposable-VM race harness to attempt rename-out while the Broker temporarily relaxes the ACL.
+
+Release gate remaining: execute the complete stacked harness in an actual disposable Windows 11 VM, retain runtime report/dumps/verifier evidence, complete the manual Explorer/Agent/UAC checklist, and resolve any loaded-driver findings before promoting the minifilter stack.
 
 ## v0.3 volume protection
 
