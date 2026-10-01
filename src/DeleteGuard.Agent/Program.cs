@@ -104,7 +104,9 @@ internal sealed class ApprovalContext : ApplicationContext
 
                 if (!record.CanApprove)
                 {
-                    if (record.Operation is DriverDeleteOperation.MoveOut or DriverDeleteOperation.ReplaceProtectedDestination)
+                    if (record.Operation is DriverDeleteOperation.MoveOut
+                        or DriverDeleteOperation.ReplaceProtectedDestination
+                        or DriverDeleteOperation.RenameProtectedAncestor)
                     {
                         ShowRenameNotice(record, decisionTime);
                     }
@@ -148,9 +150,16 @@ internal sealed class ApprovalContext : ApplicationContext
         }
 
         _lastRenameNoticeUtc = now;
-        var description = record.Operation == DriverDeleteOperation.MoveOut
-            ? "DeleteGuard blocked moving protected data outside all protected roots."
-            : "DeleteGuard blocked replacing a protected destination through a rename operation.";
+        var description = record.Operation switch
+        {
+            DriverDeleteOperation.MoveOut =>
+                "DeleteGuard blocked moving protected data outside all protected roots.",
+            DriverDeleteOperation.ReplaceProtectedDestination =>
+                "DeleteGuard blocked replacing a protected destination through a rename operation.",
+            DriverDeleteOperation.RenameProtectedAncestor =>
+                "DeleteGuard blocked renaming a directory that contains a protected root because that would invalidate the protected path policy.",
+            _ => "DeleteGuard blocked a protected rename operation."
+        };
 
         _notifyIcon.ShowBalloonTip(
             6000,
