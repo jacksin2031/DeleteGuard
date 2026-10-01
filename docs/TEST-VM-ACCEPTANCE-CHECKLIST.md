@@ -28,6 +28,12 @@ Use this checklist together with `docs/RUNTIME-VALIDATION.md`.
 - [ ] competing process remains blocked during scoped grant
 - [ ] explicit approved file deletion succeeds
 - [ ] denial events reach Event Relay
+- [ ] protected source cannot move/rename outside its protected root during Broker ACL relaxation
+- [ ] move-out destination is never created
+- [ ] outside source cannot replace an existing protected target via `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)`
+- [ ] protected replacement target retains its original content
+- [ ] `RenameOut` event reaches Relay with `canApprove=false`
+- [ ] `RenameReplace` event reaches Relay with `canApprove=false`
 - [ ] optional filter unload leaves ACL fallback effective
 - [ ] optional filter reload restores kernel event/enforcement path
 - [ ] runtime JSON report has `passed: true`
@@ -40,6 +46,9 @@ Use this checklist together with `docs/RUNTIME-VALIDATION.md`.
 - [ ] UAC cancellation leaves target intact
 - [ ] Agent **Yes** + UAC approval deletes only the displayed target
 - [ ] non-elevated PowerShell attempt follows the same prompt/UAC flow
+- [ ] protected move-out produces a warning-only Agent notification
+- [ ] protected replace-existing rename produces a warning-only Agent notification
+- [ ] neither destructive rename path offers delete/UAC approval
 - [ ] duplicate rapid attempts do not create an unusable prompt storm
 - [ ] rapid **unique-path** denied deletes produce no more than 3 automatic modal approval prompts within 30 seconds
 - [ ] additional flood events remain denied and are not replayed later as fresh prompts
@@ -53,11 +62,12 @@ Use this checklist together with `docs/RUNTIME-VALIDATION.md`.
 - [ ] no filter unload hang
 - [ ] no Event Relay reconnect hang
 - [ ] no leaked/stuck protected policy after test cleanup
-- [ ] no unexpected file deletion during race/stress cases
+- [ ] no unexpected file deletion, move-out, or overwrite during race/stress cases
 
 ## Evidence to retain
 
 - [ ] runtime-validation JSON report
+- [ ] rename-boundary validation console/result evidence
 - [ ] `verifier /querysettings` output
 - [ ] `fltmc filters` output
 - [ ] `deleteguard doctor` output
