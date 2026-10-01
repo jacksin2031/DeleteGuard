@@ -31,7 +31,11 @@ public sealed class RelayWorker : BackgroundService
         {
             try
             {
-                TrySyncPolicies();
+                if (!TrySyncPolicies())
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+                    continue;
+                }
 
                 if (!FilterEventClient.TryConnect(out var client) || client is null)
                 {
@@ -95,7 +99,7 @@ public sealed class RelayWorker : BackgroundService
         await base.StopAsync(cancellationToken);
     }
 
-    private void TrySyncPolicies()
+    private bool TrySyncPolicies()
     {
         using var mutationMutex = new Mutex(initiallyOwned: false, name: MutationMutexName);
         var acquired = false;
@@ -113,23 +117,26 @@ public sealed class RelayWorker : BackgroundService
 
             if (!acquired)
             {
-                _logger.LogInformation("Skipped policy synchronization because an administrative mutation is in progress.");
-                return;
+                _logger.LogInformation("Deferred policy synchronization because an administrative mutation is in progress.");
+                return false;
             }
 
             if (!FilterPortClient.TryConnect(out var commandClient) || commandClient is null)
             {
-                return;
+                return false;
             }
 
             using (commandClient)
             {
                 commandClient.SyncPolicies(new PolicyStore().Load());
             }
+
+            return true;
         }
         catch (Exception exception)
         {
             _logger.LogWarning(exception, "Unable to synchronize DeleteGuard policies while reconnecting event relay.");
+            return false;
         }
         finally
         {
