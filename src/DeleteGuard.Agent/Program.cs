@@ -40,7 +40,7 @@ internal sealed class ApprovalContext : ApplicationContext
     private bool _polling;
     private DateTimeOffset _lastThrottleNoticeUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastUnmappableNoticeUtc = DateTimeOffset.MinValue;
-    private DateTimeOffset _lastRenameNoticeUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastNamespaceNoticeUtc = DateTimeOffset.MinValue;
 
     public ApprovalContext()
     {
@@ -106,9 +106,11 @@ internal sealed class ApprovalContext : ApplicationContext
                 {
                     if (record.Operation is DriverDeleteOperation.MoveOut
                         or DriverDeleteOperation.ReplaceProtectedDestination
-                        or DriverDeleteOperation.RenameProtectedAncestor)
+                        or DriverDeleteOperation.RenameProtectedAncestor
+                        or DriverDeleteOperation.HardLinkOut
+                        or DriverDeleteOperation.ReplaceProtectedLinkDestination)
                     {
-                        ShowRenameNotice(record, decisionTime);
+                        ShowNamespaceNotice(record, decisionTime);
                     }
                     else
                     {
@@ -142,14 +144,14 @@ internal sealed class ApprovalContext : ApplicationContext
         }
     }
 
-    private void ShowRenameNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
+    private void ShowNamespaceNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
     {
-        if (now - _lastRenameNoticeUtc < TimeSpan.FromSeconds(15))
+        if (now - _lastNamespaceNoticeUtc < TimeSpan.FromSeconds(15))
         {
             return;
         }
 
-        _lastRenameNoticeUtc = now;
+        _lastNamespaceNoticeUtc = now;
         var description = record.Operation switch
         {
             DriverDeleteOperation.MoveOut =>
@@ -158,13 +160,17 @@ internal sealed class ApprovalContext : ApplicationContext
                 "DeleteGuard blocked replacing a protected destination through a rename operation.",
             DriverDeleteOperation.RenameProtectedAncestor =>
                 "DeleteGuard blocked renaming a directory that contains a protected root because that would invalidate the protected path policy.",
-            _ => "DeleteGuard blocked a protected rename operation."
+            DriverDeleteOperation.HardLinkOut =>
+                "DeleteGuard blocked creating an unprotected hard-link alias to protected data.",
+            DriverDeleteOperation.ReplaceProtectedLinkDestination =>
+                "DeleteGuard blocked replacing a protected destination through hard-link creation.",
+            _ => "DeleteGuard blocked a protected namespace operation."
         };
 
         _notifyIcon.ShowBalloonTip(
             6000,
-            "DeleteGuard blocked a protected rename",
-            $"{description}\n\nPath: {record.TargetPath}\n\nRename approval is intentionally not mapped to the delete broker. Unprotect or change policy explicitly before performing this operation.",
+            "DeleteGuard blocked a protected namespace change",
+            $"{description}\n\nPath: {record.TargetPath}\n\nThis namespace operation is intentionally not mapped to the delete broker. Unprotect or change policy explicitly before performing it.",
             ToolTipIcon.Warning);
     }
 
