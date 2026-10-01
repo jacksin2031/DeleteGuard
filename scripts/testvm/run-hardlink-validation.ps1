@@ -13,6 +13,12 @@ if (-not (Test-DeleteGuardFilterLoaded)) {
     throw 'DeleteGuardFilter is not loaded. Run install-test-stack.ps1 first.'
 }
 
+$probeSource = Join-Path $PSScriptRoot 'HardLinkProbe.cs'
+if (-not (Test-Path -LiteralPath $probeSource)) {
+    throw "Hard-link probe source was not found: $probeSource"
+}
+Add-Type -Path $probeSource
+
 $caseRoot = Join-Path $script:DeleteGuardTestRoot 'HardLinkCase'
 $caseSentinel = Join-Path $caseRoot '.deleteguard-hardlink-test-case'
 $protectedRoot = Join-Path $caseRoot 'Protected'
@@ -30,116 +36,6 @@ $results = [System.Collections.Generic.List[object]]::new()
 $StatusAccessDenied = -1073741790 # 0xC0000022
 
 Assert-DeleteGuardSafeTestPath -Path $caseRoot
-
-Add-Type -TypeDefinition @'
-using System;
-using System.IO;
-using System.Runtime.InteropServices;
-using System.Text;
-
-public static class DeleteGuardHardLinkProbe
-{
-    private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
-    private const uint FILE_SHARE_READ = 0x00000001;
-    private const uint FILE_SHARE_WRITE = 0x00000002;
-    private const uint FILE_SHARE_DELETE = 0x00000004;
-    private const uint OPEN_EXISTING = 3;
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool CreateHardLink(string newFileName, string existingFileName, IntPtr securityAttributes);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr CreateFile(
-        string fileName,
-        uint desiredAccess,
-        uint shareMode,
-        IntPtr securityAttributes,
-        uint creationDisposition,
-        uint flagsAndAttributes,
-        IntPtr templateFile);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr handle);
-
-    [DllImport("ntdll.dll")]
-    private static extern int NtSetInformationFile(
-        IntPtr fileHandle,
-        out IO_STATUS_BLOCK ioStatusBlock,
-        IntPtr fileInformation,
-        uint length,
-        int fileInformationClass);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct IO_STATUS_BLOCK
-    {
-        public IntPtr Status;
-        public UIntPtr Information;
-    }
-
-    public static int CreateHardLinkError(string aliasPath, string sourcePath)
-    {
-        if (CreateHardLink(aliasPath, sourcePath, IntPtr.Zero))
-        {
-            return 0;
-        }
-        return Marshal.GetLastWin32Error();
-    }
-
-    public static int ReplaceWithHardLinkStatus(string sourcePath, string targetPath)
-    {
-        IntPtr handle = CreateFile(
-            Path.GetFullPath(sourcePath),
-            0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            IntPtr.Zero,
-            OPEN_EXISTING,
-            0,
-            IntPtr.Zero);
-        if (handle == INVALID_HANDLE_VALUE)
-        {
-            throw new InvalidOperationException("CreateFileW failed: " + Marshal.GetLastWin32Error());
-        }
-
-        try
-        {
-            string ntTarget = @"\??\" + Path.GetFullPath(targetPath);
-            byte[] fileName = Encoding.Unicode.GetBytes(ntTarget);
-            int rootOffset = IntPtr.Size == 8 ? 8 : 4;
-            int lengthOffset = rootOffset + IntPtr.Size;
-            int nameOffset = lengthOffset + sizeof(uint);
-            int total = checked(nameOffset + fileName.Length);
-            IntPtr buffer = Marshal.AllocHGlobal(total);
-            try
-            {
-                for (int offset = 0; offset < total; offset++)
-                {
-                    Marshal.WriteByte(buffer, offset, 0);
-                }
-                Marshal.WriteInt32(buffer, 0, 1); // FILE_LINK_REPLACE_IF_EXISTS
-                Marshal.WriteIntPtr(buffer, rootOffset, IntPtr.Zero);
-                Marshal.WriteInt32(buffer, lengthOffset, fileName.Length);
-                Marshal.Copy(fileName, 0, IntPtr.Add(buffer, nameOffset), fileName.Length);
-
-                IO_STATUS_BLOCK iosb;
-                return NtSetInformationFile(
-                    handle,
-                    out iosb,
-                    buffer,
-                    (uint)total,
-                    72); // FileLinkInformationEx
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(buffer);
-            }
-        }
-        finally
-        {
-            CloseHandle(handle);
-        }
-    }
-}
-'@
 
 function Add-Result {
     param([string]$Name, [bool]$Passed, [string]$Detail)
@@ -185,25 +81,12 @@ try {
         ($replaceStatus -eq $StatusAccessDenied) `
         ("NtSetInformationFile status=0x{0:X8}" -f ([uint32]$replaceStatus))
 
-    $hardLinkProbeType = @'
-using System;
-using System.Runtime.InteropServices;
-public static class DeleteGuardHardLinkRaceProbe {
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool CreateHardLink(string newFileName, string existingFileName, IntPtr securityAttributes);
-    public static int TryLink(string aliasPath, string sourcePath) {
-        if (CreateHardLink(aliasPath, sourcePath, IntPtr.Zero)) return 0;
-        return Marshal.GetLastWin32Error();
-    }
-}
-'@
-
     $raceJob = Start-Job -ScriptBlock {
-        param($Alias, $Source, $Attempts, $TypeDefinition)
-        Add-Type -TypeDefinition $TypeDefinition
+        param($Alias, $Source, $Attempts, $ProbeSource)
+        Add-Type -Path $ProbeSource
         $unexpected = @()
         for ($i = 0; $i -lt $Attempts; $i++) {
-            $errorCode = [DeleteGuardHardLinkRaceProbe]::TryLink($Alias, $Source)
+            $errorCode = [DeleteGuardHardLinkProbe]::CreateHardLinkError($Alias, $Source)
             if ($errorCode -eq 0) {
                 $unexpected += 0
                 break
@@ -213,8 +96,11 @@ public static class DeleteGuardHardLinkRaceProbe {
             }
             Start-Sleep -Milliseconds 2
         }
-        [pscustomobject]@{ unexpected = $unexpected; aliasExists = (Test-Path -LiteralPath $Alias) }
-    } -ArgumentList $raceAlias, $raceSource, $RaceAttempts, $hardLinkProbeType
+        [pscustomobject]@{
+            unexpected = $unexpected
+            aliasExists = (Test-Path -LiteralPath $Alias)
+        }
+    } -ArgumentList $raceAlias, $raceSource, $RaceAttempts, $probeSource
 
     try {
         Invoke-DeleteGuardBroker -Command delete -Path $approvedTree
@@ -246,7 +132,12 @@ public static class DeleteGuardHardLinkRaceProbe {
 }
 finally {
     if ($protected -and (Test-Path -LiteralPath $protectedRoot)) {
-        try { Invoke-DeleteGuardBroker -Command unprotect -Path $protectedRoot } catch { Write-Warning $_.Exception.Message }
+        try {
+            Invoke-DeleteGuardBroker -Command unprotect -Path $protectedRoot
+        }
+        catch {
+            Write-Warning $_.Exception.Message
+        }
     }
 
     if (Test-Path -LiteralPath $caseRoot) {
