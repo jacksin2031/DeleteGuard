@@ -26,7 +26,8 @@ public enum DriverEventType : uint
 public enum DriverDeleteOperation : uint
 {
     Disposition = 1,
-    DeleteOnClose = 2
+    DeleteOnClose = 2,
+    NamespaceMutation = 3
 }
 
 public static class DriverProtocol
