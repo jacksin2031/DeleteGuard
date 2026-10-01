@@ -91,16 +91,11 @@ internal sealed class ApprovalContext : ApplicationContext
         {
             foreach (var record in _store.ReadLast(100).OrderBy(record => record.ObservedUtc))
             {
-                // Mark an event known before any filtering so a throttled or stale event
-                // can never be replayed later as a fresh approval opportunity.
                 if (!_known.Add(record.EventId))
                 {
                     continue;
                 }
 
-                // A modal prompt can keep this loop blocked for an arbitrary time.
-                // Re-read the clock for every event so the freshness and rate-limit
-                // decisions reflect the actual time at which UI would be shown.
                 var decisionTime = DateTimeOffset.UtcNow;
                 if (decisionTime - record.ObservedUtc > TimeSpan.FromSeconds(20))
                 {
@@ -155,8 +150,8 @@ internal sealed class ApprovalContext : ApplicationContext
         _lastNamespaceNoticeUtc = now;
         _notifyIcon.ShowBalloonTip(
             6000,
-            "DeleteGuard blocked a protected rename/move",
-            $"A rename, move-out, or replacement affecting protected data was denied: {record.TargetPath}. Namespace changes are not auto-approvable in this prototype.",
+            "DeleteGuard blocked a protected namespace change",
+            $"A rename, move, replacement, or hard-link alias affecting protected data was denied: {record.TargetPath}. Namespace changes are not auto-approvable in this prototype.",
             ToolTipIcon.Warning);
     }
 
