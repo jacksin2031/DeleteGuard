@@ -26,11 +26,14 @@ public sealed class DriverProtocolTests
     {
         Assert.Equal(1u, (uint)DriverEventType.DeleteDenied);
         Assert.Equal(2u, (uint)DriverEventType.RenameDenied);
+        Assert.Equal(3u, (uint)DriverEventType.HardLinkDenied);
         Assert.Equal(1u, (uint)DriverDeleteOperation.Disposition);
         Assert.Equal(2u, (uint)DriverDeleteOperation.DeleteOnClose);
         Assert.Equal(3u, (uint)DriverDeleteOperation.MoveOut);
         Assert.Equal(4u, (uint)DriverDeleteOperation.ReplaceProtectedDestination);
         Assert.Equal(5u, (uint)DriverDeleteOperation.RenameProtectedAncestor);
+        Assert.Equal(6u, (uint)DriverDeleteOperation.HardLinkOut);
+        Assert.Equal(7u, (uint)DriverDeleteOperation.ReplaceProtectedLinkDestination);
     }
 
     [Fact]
