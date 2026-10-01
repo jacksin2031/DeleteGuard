@@ -1,6 +1,6 @@
-# Interactive approval prototype (v0.2.1)
+# Interactive approval prototype (v0.2.1+)
 
-DeleteGuard v0.2.1 adds a user-visible approval path for deletion attempts denied by the v0.2 minifilter.
+DeleteGuard v0.2.1 adds a user-visible approval path for deletion attempts denied by the v0.2 minifilter. v0.2.3 hardens that path against denial-event and approval-prompt flooding.
 
 ## Security architecture
 
@@ -19,7 +19,7 @@ admin-only FltMgr communication port
         v
 DeleteGuard.EventRelay.exe (LocalSystem service)
         |
-        | append-only JSONL, protected by ProgramData ACL
+        | bounded de-dup + bounded JSONL history
         v
 %ProgramData%\DeleteGuard\denied-events.jsonl
         |
@@ -27,6 +27,7 @@ DeleteGuard.EventRelay.exe (LocalSystem service)
         v
 DeleteGuard.Agent.exe (interactive user session)
         |
+        | bounded unsolicited prompt rate
         | user clicks Yes
         v
 UAC / runas
@@ -43,11 +44,11 @@ The desktop Agent never receives access to the kernel command channel. The Filte
 
 ## Deny-then-approved-delete semantics
 
-v0.2.1 intentionally does **not** hold the original filesystem request open while waiting for UI or UAC.
+DeleteGuard intentionally does **not** hold the original filesystem request open while waiting for UI or UAC.
 
 The original delete request is denied immediately. If the user approves the prompt, the elevated broker performs a separate, explicitly approved deletion. Explorer, PowerShell, or another caller can therefore display an Access Denied error before the approved broker deletion completes.
 
-This keeps filesystem I/O independent of desktop availability, UAC latency, hung sessions, disconnected RDP sessions, and user interaction. A future design may evaluate bounded pending/retry behavior only after loaded-driver stress and deadlock testing.
+This keeps filesystem I/O independent of desktop availability, UAC latency, hung sessions, disconnected RDP sessions, user interaction, and prompt-rate limiting. A missing/suppressed notification never changes enforcement.
 
 ## Kernel event channel
 
@@ -82,17 +83,28 @@ On connection/reconnection it:
 5. converts NT device paths back to drive-letter paths where possible;
 6. records the process name when still available;
 7. suppresses identical PID/operation/path events within two seconds;
-8. appends the event to the protected JSONL stream.
+8. keeps the in-memory de-duplication state hard-capped at 512 entries, evicting stale/oldest entries under a unique-path flood;
+9. appends accepted events to the protected JSONL stream.
 
 Using the same mutation mutex is important because `ResetRoots` also clears active grants. Relay synchronization must not run concurrently with an approved broker deletion.
 
-The event history is bounded. `denied-events.jsonl` rotates at 4 MiB and at most one previous file (`denied-events.1.jsonl`) is retained.
+The event history is also bounded on disk. `denied-events.jsonl` rotates at 4 MiB and at most one previous file (`denied-events.1.jsonl`) is retained.
 
-## Desktop Agent
+## Desktop Agent and prompt-flood behavior
 
 `DeleteGuard.Agent.exe` runs unelevated in the interactive user's session.
 
-It reads recent denial events and prompts only for newly observed events. A Yes response starts the existing broker with `Verb=runas`, which produces the Windows UAC administrator prompt. A No response, closed dialog, UAC cancellation, missing Agent, missing Relay, or notification loss never permits the original deletion.
+It reads recent denial events and prompts only for newly observed events. A Yes response starts the existing broker with `Verb=runas`, which produces the Windows UAC administrator prompt. A No response, closed dialog, UAC cancellation, missing Agent, missing Relay, notification loss, or rate-limited prompt never permits the original deletion.
+
+To avoid approval/UAC fatigue from a malicious or buggy process, automatic modal approval prompts are limited to **3 prompts per rolling 30 seconds**. Further newly observed events are marked consumed and remain denied; they are not replayed later as fresh approval opportunities. While throttled, the Agent emits at most one warning balloon every 15 seconds.
+
+Prompt throttling affects only unsolicited UI. A deliberate administrator can still use:
+
+```powershell
+deleteguard delete <path>
+```
+
+for an explicit approval path.
 
 The Agent does not trust the JSONL file as authorization. The elevated broker re-validates that the target is still covered by a DeleteGuard policy before any delete is attempted.
 
@@ -140,7 +152,8 @@ Before this layer can be considered production-ready it still needs loaded-drive
 - Explorer delete and recycle-bin paths;
 - `Remove-Item`, `del`, `rmdir`, Python, .NET and direct Win32 delete APIs;
 - recursive directory deletion;
-- multiple rapid denial events and event-log rotation;
+- multiple rapid unique-path denial events: Relay state remains bounded and no more than 3 automatic modal prompts occur in 30 seconds;
+- event-log rotation;
 - service restart and driver restart behavior;
 - UAC approve/cancel/no-response flows;
 - broker/relay synchronization races;

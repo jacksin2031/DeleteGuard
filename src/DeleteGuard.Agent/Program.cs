@@ -31,9 +31,14 @@ internal sealed class ApprovalContext : ApplicationContext
 {
     private readonly DeniedDeleteEventStore _store = new();
     private readonly HashSet<Guid> _known = new();
+    private readonly ApprovalPromptLimiter _promptLimiter = new(
+        maxPrompts: 3,
+        window: TimeSpan.FromSeconds(30));
     private readonly NotifyIcon _notifyIcon;
     private readonly System.Windows.Forms.Timer _timer;
     private bool _polling;
+    private DateTimeOffset _lastThrottleNoticeUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastUnmappableNoticeUtc = DateTimeOffset.MinValue;
 
     public ApprovalContext()
     {
@@ -82,26 +87,33 @@ internal sealed class ApprovalContext : ApplicationContext
 
         try
         {
-            var now = DateTimeOffset.UtcNow;
             foreach (var record in _store.ReadLast(100).OrderBy(record => record.ObservedUtc))
             {
+                // Mark an event known before any filtering so a throttled or stale event
+                // can never be replayed later as a fresh approval opportunity.
                 if (!_known.Add(record.EventId))
                 {
                     continue;
                 }
 
-                if (now - record.ObservedUtc > TimeSpan.FromSeconds(20))
+                // A modal prompt can keep this loop blocked for an arbitrary time.
+                // Re-read the clock for every event so the freshness and rate-limit
+                // decisions reflect the actual time at which UI would be shown.
+                var decisionTime = DateTimeOffset.UtcNow;
+                if (decisionTime - record.ObservedUtc > TimeSpan.FromSeconds(20))
                 {
                     continue;
                 }
 
                 if (!record.CanApprove)
                 {
-                    _notifyIcon.ShowBalloonTip(
-                        5000,
-                        "DeleteGuard blocked a deletion",
-                        $"A protected delete was denied, but its NT path could not be mapped to a drive-letter path: {record.NtPath}",
-                        ToolTipIcon.Warning);
+                    ShowUnmappableNotice(record, decisionTime);
+                    continue;
+                }
+
+                if (!_promptLimiter.TryAcquire(decisionTime))
+                {
+                    ShowThrottleNotice(decisionTime);
                     continue;
                 }
 
@@ -122,6 +134,36 @@ internal sealed class ApprovalContext : ApplicationContext
             _polling = false;
             _timer.Start();
         }
+    }
+
+    private void ShowUnmappableNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
+    {
+        if (now - _lastUnmappableNoticeUtc < TimeSpan.FromSeconds(15))
+        {
+            return;
+        }
+
+        _lastUnmappableNoticeUtc = now;
+        _notifyIcon.ShowBalloonTip(
+            5000,
+            "DeleteGuard blocked a deletion",
+            $"A protected delete was denied, but its NT path could not be mapped to a drive-letter path: {record.NtPath}",
+            ToolTipIcon.Warning);
+    }
+
+    private void ShowThrottleNotice(DateTimeOffset now)
+    {
+        if (now - _lastThrottleNoticeUtc < TimeSpan.FromSeconds(15))
+        {
+            return;
+        }
+
+        _lastThrottleNoticeUtc = now;
+        _notifyIcon.ShowBalloonTip(
+            6000,
+            "DeleteGuard is limiting approval prompts",
+            "Many protected deletion attempts were blocked. Automatic approval dialogs are temporarily rate-limited. Protected data remains blocked; use 'deleteguard delete <path>' for an explicit administrator-approved deletion.",
+            ToolTipIcon.Warning);
     }
 
     private void Prompt(DeniedDeleteEventRecord record)
