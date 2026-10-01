@@ -14,22 +14,23 @@ Protected roots receive inherited deny rules for delete operations. This remains
 
 - `FileDispositionInformation` / `FileDispositionInformationEx` deletion;
 - `FILE_DELETE_ON_CLOSE`;
-- rename/move namespace mutations through `FileRenameInformation`, `FileRenameInformationEx`, and their bypass-access-check variants.
+- rename/move namespace mutations through `FileRenameInformation*`;
+- NTFS hard-link namespace mutations through `FileLinkInformation*`.
 
 For deletion, a configured protected path is denied unless the actual I/O requestor has a valid short-lived path-scoped grant. Since v0.2.4, a grant binds PID + process start key + target path + expiry, so PID reuse cannot inherit a still-live Broker grant.
 
-For namespace mutations, delete grants do not apply. A protected source cannot be renamed or moved outside its protecting root, and rename-with-replace cannot replace a protected destination. If the destination of a protected-source rename cannot be resolved, the namespace mutation fails closed.
+Delete grants do not authorize namespace changes. A protected source cannot be renamed, moved, or hard-linked outside its protecting root. Replace-existing rename/link operations cannot replace a protected destination. If a protected-source destination cannot be safely resolved, the namespace mutation fails closed.
 
 ### Safe set-information buffer capture
 
 `IRP_MJ_SET_INFORMATION` can expose buffers originating from user mode. DeleteGuard does not directly trust or retain those buffers:
 
 - fixed-size disposition data is probed when required and copied into kernel-local structures before inspection;
-- variable-length rename metadata is length-checked;
-- the rename filename is copied into nonpaged kernel memory before destination resolution;
+- variable-length rename/link metadata is length-checked;
+- the destination filename is copied into nonpaged kernel memory before Filter Manager destination resolution;
 - accesses are wrapped in structured exception handling.
 
-This avoids direct user-buffer dereference faults and closes a check/use race where user mode could otherwise alter rename metadata after validation.
+Rename and hard-link operations deliberately share this capture path so alias containment does not introduce a second, weaker parser.
 
 ### Elevated Broker
 
@@ -48,7 +49,7 @@ Protocol v3 has two roles on the same administrator/SYSTEM-only Filter Manager c
 
 `DeleteGuard.Agent.exe` runs unelevated in the interactive session. Fresh delete denials may become an explicit approval prompt. Choosing Yes starts the existing Broker with Windows UAC elevation.
 
-Namespace-mutation denials are deliberately **not approvable** through this flow. They produce visibility/warning only, so a blocked rename or move can never be transformed into an unintended Broker deletion.
+Namespace-mutation denials are deliberately **not approvable**. Rename, move, replacement, and hard-link alias denials are visibility/warning events only and can never be transformed into an unintended Broker deletion.
 
 The denial stream is not an authorization source. The Broker independently checks that a delete target is still covered by a current protection policy.
 
@@ -64,10 +65,12 @@ During an approved recursive deletion the v0.1 ACL must temporarily be relaxed o
 
 - unrelated delete requests remain blocked;
 - delete grants are bound to Broker process identity and approved path;
-- protected files cannot be moved out of their protecting root;
-- rename-with-replace cannot overwrite a protected destination.
+- protected files cannot be moved or renamed out of their protecting root;
+- rename-with-replace cannot overwrite a protected destination;
+- protected files cannot acquire a hard-link alias outside their protecting root;
+- link-with-replace cannot replace a protected destination.
 
-The disposable-VM harness includes competing-process race tests for both delete and namespace mutations.
+The disposable-VM harness contains competing-process race cases for delete, rename/move, replacement, and hard-link escape.
 
 ## Event-channel protections
 
@@ -80,14 +83,14 @@ The disposable-VM harness includes competing-process race tests for both delete 
 
 ## Current namespace boundary
 
-Hard-link creation (`FileLinkInformation` / `FileLinkInformationEx`) is being treated as a separate hardening item. Until that gate is implemented and runtime-validated, DeleteGuard should not claim that every possible NTFS alias can be prevented from leaving a protected namespace.
+The development gate now covers destructive rename/move and NTFS hard-link alias creation. Reparse-point protection roots remain unsupported/rejected.
 
-Reparse-point protection roots remain unsupported/rejected.
+This is not yet a claim of complete production-grade alias containment. Loaded-driver testing must still exercise normalized-name behavior, existing hard-link edge cases, reparse interactions, cross-volume failures, and hostile/malformed set-information requests under Driver Verifier.
 
 ## Development status
 
-The CI driver artifact is unsigned and intended only for disposable test VMs. The INF still uses a development altitude. CI verifies compilation, Universal ApiValidator, Inf2Cat signability, managed tests, test-VM script parsing, and destructive-path safety guards.
+The CI driver artifact is unsigned and intended only for disposable test VMs. The INF still uses a development altitude. CI verifies compilation, Universal ApiValidator, Inf2Cat signability, managed protocol/build/tests/package, Windows PowerShell 5.1 parsing, native test-probe compilation, and destructive-path safety guards.
 
-Loaded-driver runtime testing, Driver Verifier evidence, namespace race testing, production altitude allocation, release signing, and recovery/tamper review are still required before production use.
+Loaded-driver runtime testing, Driver Verifier evidence, namespace/hard-link race testing, production altitude allocation, release signing, and recovery/tamper review are still required before production use.
 
 DeleteGuard is not a backup. Independent versioned backups remain necessary for important data.
