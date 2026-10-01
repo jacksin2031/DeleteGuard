@@ -23,12 +23,15 @@ typedef enum _DG_COMMAND_TYPE {
 } DG_COMMAND_TYPE;
 
 typedef enum _DG_EVENT_TYPE {
-    DgEventDeleteDenied = 1
+    DgEventDeleteDenied = 1,
+    DgEventRenameDenied = 2
 } DG_EVENT_TYPE;
 
 typedef enum _DG_DELETE_OPERATION {
     DgDeleteOperationDisposition = 1,
-    DgDeleteOperationDeleteOnClose = 2
+    DgDeleteOperationDeleteOnClose = 2,
+    DgDeleteOperationMoveOut = 3,
+    DgDeleteOperationReplaceProtectedDestination = 4
 } DG_DELETE_OPERATION;
 
 typedef struct _DG_CONNECT_CONTEXT {
