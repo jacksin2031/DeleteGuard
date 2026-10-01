@@ -1,6 +1,6 @@
-# DeleteGuard v0.2 minifilter design
+# DeleteGuard minifilter design
 
-DeleteGuard v0.2 adds a Windows file-system minifilter to close the temporary ACL-release race in v0.1.
+DeleteGuard v0.2 adds a Windows file-system minifilter to close the temporary ACL-release race in v0.1. v0.2.1 adds the denied-event/interactive approval pipeline. v0.2.2 adds a guarded loaded-driver validation harness for disposable Windows test VMs.
 
 ## Enforcement path
 
@@ -16,34 +16,41 @@ Explorer / cmd / PowerShell / Python / Win32 API
      protected + no grant     not protected
              |                    |
       STATUS_ACCESS_DENIED        v
-                          normal NTFS processing
+             |             normal NTFS processing
+             v
+       best-effort event
+             |
+   LocalSystem Event Relay
+             |
+      desktop Agent prompt
+             |
+       Yes -> Windows UAC
+             |
+      DeleteGuard.Broker
+```
 
-Approved path:
+Approved Broker path:
 
-deleteguard delete <path>
-        |
-        v
-UAC -> DeleteGuard.Broker.exe
-        |
-        +--> sync protected NT paths to minifilter
-        +--> grant {broker PID, target path, <=30s TTL}
-        +--> temporarily remove v0.1 DELETE ACL
-        +--> perform deletion
-        +--> revoke grant
-        +--> re-sync policies / restore ACL when appropriate
+```text
+sync protected NT paths
+-> grant {broker PID, target path, <=30s TTL}
+-> temporarily remove v0.1 DELETE ACL
+-> perform deletion
+-> revoke grant
+-> re-sync policies / restore ACL when appropriate
 ```
 
 The ACL layer remains present as a fallback. If the driver is unavailable, v0.1 behavior remains active. If the driver is present but rejects a sync or grant command, the broker fails closed and does not relax the ACL.
 
 ## Operations intercepted
 
-The v0.2 kernel gate currently handles:
+The kernel gate currently handles:
 
 - `IRP_MJ_SET_INFORMATION` + `FileDispositionInformation`
 - `IRP_MJ_SET_INFORMATION` + `FileDispositionInformationEx`
 - `IRP_MJ_CREATE` with `FILE_DELETE_ON_CLOSE`
 
-The filter attaches to NTFS only, matching the v0.1 support boundary.
+The filter attaches to NTFS only, matching the v0.1 support boundary. Destructive rename/move-out enforcement remains future work.
 
 ## Protected roots
 
@@ -59,7 +66,7 @@ to the device-path form observed by Filter Manager:
 \Device\HarddiskVolumeX\Projects\Important
 ```
 
-The kernel stores up to 64 active roots in the v0.2 prototype. A path matches a root only when it is the same path or a true descendant boundary, not merely a string prefix.
+The prototype stores up to 64 active roots. A path matches a root only when it is the same path or a true descendant boundary, not merely a string prefix.
 
 ## Scoped grants
 
@@ -72,24 +79,26 @@ A grant contains:
 
 A grant covers the target and descendants so one elevated recursive delete can remove a tree. The broker normally requests 15 seconds and explicitly revokes the grant in `finally` after the operation.
 
-This means that while the v0.1 ACL is temporarily absent, unrelated processes remain blocked by the minifilter.
+While the v0.1 ACL is temporarily absent, unrelated processes remain blocked by the minifilter. The runtime validation harness includes a competing-process race test specifically for this boundary.
 
-## Communication security
+## Communication security and protocol v3
 
-The driver exposes `\DeleteGuardPort` with `FltCreateCommunicationPort` and the Filter Manager default security descriptor for `FLT_PORT_ALL_ACCESS`. The current protocol is fixed-layout version 2 and supports:
+The driver exposes `\DeleteGuardPort` through `FltCreateCommunicationPort` with the Filter Manager default security descriptor for `FLT_PORT_ALL_ACCESS`. The port therefore remains restricted to privileged callers rather than being opened directly to a normal desktop Agent.
 
-- ping
-- reset roots
-- add root
-- remove root
-- grant
-- revoke
+Protocol v3 distinguishes two connection roles:
 
-The C# side contains ABI-size tests to catch native/managed structure drift.
+- **Command**: privileged Broker/Relay policy synchronization (`ping`, reset/add/remove roots, grant, revoke).
+- **Event**: LocalSystem Event Relay receives delete-denied notifications.
+
+The Agent never receives kernel command access. The Relay persists a bounded read-only denial history under `%ProgramData%\DeleteGuard` for the Agent.
+
+Kernel event delivery is zero-wait/best-effort. A missing or slow user-mode listener must never stall filesystem I/O or convert a deny into an allow.
+
+The C# side contains ABI-size/layout tests for the fixed native/managed protocol structures.
 
 ## Build
 
-The driver build is pinned to the VS2022-compatible WDK/SDK `10.0.26100.6584` NuGet packages.
+The x64 driver build is pinned to the VS2022-compatible WDK/SDK `10.0.26100.6584` NuGet packages.
 
 ```powershell
 .\scripts\build-driver.ps1 -Configuration Release
@@ -100,26 +109,32 @@ Output:
 ```text
 artifacts\driver-x64\DeleteGuardFilter.sys
 artifacts\driver-x64\DeleteGuardFilter.inf
+artifacts\driver-x64\DeleteGuardFilter.cat
 ```
 
 CI deliberately publishes an **unsigned** driver artifact.
 
-## Testing and signing
+## Runtime testing and signing
 
-Do not load the CI driver on a production machine. Driver installation/testing belongs in a disposable Windows driver-test VM with a deliberate test-signing workflow.
+Do not load the CI driver on a production machine. Build verification, Universal ApiValidator and Inf2Cat signability are not substitutes for a loaded-driver test.
 
-Before any public/production release, DeleteGuard still needs:
+Use the guarded disposable-VM runbook:
 
-1. a Microsoft-assigned minifilter altitude;
-2. production driver signing / attestation or HLK path as applicable;
-3. VM integration tests with the actual loaded driver;
-4. stress/race tests for recursive deletion, delete-on-close and concurrent processes;
-5. event-driven user notification / approval UX for arbitrary Explorer or shell delete attempts.
+- [RUNTIME-VALIDATION.md](RUNTIME-VALIDATION.md)
+
+The test harness covers local test signing, Filter Manager load/unload, targeted Driver Verifier, multiple deletion paths, Relay outage behavior, repeated denial stress, scoped-grant race testing and optional driver reload/ACL fallback.
+
+The interactive Agent/UAC acceptance remains manual by design because it validates a real desktop session and Windows secure-desktop elevation flow.
+
+## Production release blockers
+
+Before any public/production driver release, DeleteGuard still needs:
+
+1. a Microsoft-assigned production minifilter altitude;
+2. a production driver signing / attestation or HLK path as applicable;
+3. recorded loaded-driver VM runs under Driver Verifier with no violations;
+4. stress/race testing results retained as release evidence;
+5. destructive rename/move-out enforcement or an explicitly accepted scope boundary;
+6. service/driver tamper-hardening review and recovery/uninstall validation.
 
 The altitude in `DeleteGuardFilter.inf` is development-only and must not be shipped as a production altitude.
-
-## Current UX boundary
-
-v0.2 provides kernel enforcement, but arbitrary Explorer/PowerShell delete attempts are still **denied**, not automatically converted into a UAC dialog. `deleteguard delete <path>` is the approved UAC path.
-
-The next user-experience layer is an interactive request broker/tray: the minifilter reports a denied deletion request, the user explicitly chooses to approve it, UAC elevates the grant issuer, and the originating operation is retried under a scoped grant. The kernel filter must never display UI itself.
