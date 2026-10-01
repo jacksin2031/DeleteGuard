@@ -46,14 +46,25 @@ static NTSTATUS DgPortMessage(
     _Out_ PULONG ReturnOutputBufferLength);
 
 static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data);
+static BOOLEAN DgSetInfoRequestsRename(_In_ PFLT_CALLBACK_DATA Data);
+static BOOLEAN DgRenameRequestsReplace(_In_ PFLT_CALLBACK_DATA Data);
 static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
     _Inout_ PFLT_CALLBACK_DATA Data,
     _In_ DG_DELETE_OPERATION Operation);
+static FLT_PREOP_CALLBACK_STATUS DgEnforceNamespaceMutation(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static VOID DgPublishDeniedEvent(
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG ProcessId,
     _In_ DG_DELETE_OPERATION Operation);
-static BOOLEAN DgPathIsSameOrDescendant(_In_ PCUNICODE_STRING Candidate, _In_reads_(RootChars) const WCHAR *Root, _In_ USHORT RootChars);
+static BOOLEAN DgPathIsSameOrDescendant(
+    _In_ PCUNICODE_STRING Candidate,
+    _In_reads_(RootChars) const WCHAR *Root,
+    _In_ USHORT RootChars);
+static BOOLEAN DgGetProtectingRoot(
+    _In_ PCUNICODE_STRING Name,
+    _Out_opt_ PDG_ROOT_ENTRY Root);
 static BOOLEAN DgIsProtectedAndGranted(
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG ProcessId,
@@ -228,8 +239,11 @@ static FLT_PREOP_CALLBACK_STATUS DgPreSetInformation(
     _In_ PCFLT_RELATED_OBJECTS FltObjects,
     _Flt_CompletionContext_Outptr_ PVOID *CompletionContext)
 {
-    UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(CompletionContext);
+
+    if (DgSetInfoRequestsRename(Data)) {
+        return DgEnforceNamespaceMutation(Data, FltObjects);
+    }
 
     if (!DgSetInfoRequestsDelete(Data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -254,6 +268,37 @@ static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data)
 
     if (infoClass == FileDispositionInformationEx && length >= sizeof(FILE_DISPOSITION_INFORMATION_EX)) {
         return FlagOn(((PFILE_DISPOSITION_INFORMATION_EX)buffer)->Flags, FILE_DISPOSITION_DELETE) ? TRUE : FALSE;
+    }
+
+    return FALSE;
+}
+
+static BOOLEAN DgSetInfoRequestsRename(_In_ PFLT_CALLBACK_DATA Data)
+{
+    FILE_INFORMATION_CLASS infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+
+    return infoClass == FileRenameInformation ||
+        infoClass == FileRenameInformationBypassAccessCheck ||
+        infoClass == FileRenameInformationEx ||
+        infoClass == FileRenameInformationExBypassAccessCheck;
+}
+
+static BOOLEAN DgRenameRequestsReplace(_In_ PFLT_CALLBACK_DATA Data)
+{
+    FILE_INFORMATION_CLASS infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    PFILE_RENAME_INFORMATION renameInfo =
+        (PFILE_RENAME_INFORMATION)Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
+
+    if (renameInfo == NULL) {
+        return FALSE;
+    }
+
+    if (infoClass == FileRenameInformation || infoClass == FileRenameInformationBypassAccessCheck) {
+        return renameInfo->ReplaceIfExists ? TRUE : FALSE;
+    }
+
+    if (infoClass == FileRenameInformationEx || infoClass == FileRenameInformationExBypassAccessCheck) {
+        return FlagOn(renameInfo->Flags, FILE_RENAME_REPLACE_IF_EXISTS) ? TRUE : FALSE;
     }
 
     return FALSE;
@@ -309,6 +354,124 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
     Data->IoStatus.Status = STATUS_ACCESS_DENIED;
     Data->IoStatus.Information = 0;
     return FLT_PREOP_COMPLETE;
+}
+
+static FLT_PREOP_CALLBACK_STATUS DgEnforceNamespaceMutation(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects)
+{
+    NTSTATUS status;
+    PFLT_FILE_NAME_INFORMATION sourceInfo = NULL;
+    PFLT_FILE_NAME_INFORMATION destinationInfo = NULL;
+    PFILE_RENAME_INFORMATION renameInfo;
+    DG_ROOT_ENTRY sourceRoot = { 0 };
+    BOOLEAN sourceProtected;
+    BOOLEAN destinationProtected;
+    BOOLEAN replaceIfExists;
+    ULONG processId;
+    ULONG bufferLength;
+    ULONG headerLength = FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName);
+
+    renameInfo = (PFILE_RENAME_INFORMATION)Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
+    bufferLength = Data->Iopb->Parameters.SetFileInformation.Length;
+    if (renameInfo == NULL || bufferLength < headerLength) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    __try {
+        if (renameInfo->FileNameLength == 0 ||
+            (renameInfo->FileNameLength % sizeof(WCHAR)) != 0 ||
+            renameInfo->FileNameLength > (bufferLength - headerLength)) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    processId = FltGetRequestorProcessId(Data);
+    replaceIfExists = DgRenameRequestsReplace(Data);
+
+    status = FltGetFileNameInformation(
+        Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &sourceInfo);
+
+    if (!NT_SUCCESS(status)) {
+        status = FltGetFileNameInformation(
+            Data,
+            FLT_FILE_NAME_OPENED | FLT_FILE_NAME_QUERY_DEFAULT,
+            &sourceInfo);
+    }
+
+    if (!NT_SUCCESS(status) || sourceInfo == NULL) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    sourceProtected = DgGetProtectingRoot(&sourceInfo->Name, &sourceRoot);
+    if (!sourceProtected && !replaceIfExists) {
+        FltReleaseFileNameInformation(sourceInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    status = FltGetDestinationFileNameInformation(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        renameInfo->RootDirectory,
+        renameInfo->FileName,
+        renameInfo->FileNameLength,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &destinationInfo);
+
+    if (!NT_SUCCESS(status) || destinationInfo == NULL) {
+        if (sourceProtected) {
+            DgPublishDeniedEvent(
+                &sourceInfo->Name,
+                processId,
+                DgDeleteOperationNamespaceMutation);
+            FltReleaseFileNameInformation(sourceInfo);
+            Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+            Data->IoStatus.Information = 0;
+            return FLT_PREOP_COMPLETE;
+        }
+
+        FltReleaseFileNameInformation(sourceInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    destinationProtected = DgGetProtectingRoot(&destinationInfo->Name, NULL);
+
+    if (sourceProtected &&
+        !DgPathIsSameOrDescendant(
+            &destinationInfo->Name,
+            sourceRoot.Path,
+            sourceRoot.Length)) {
+        DgPublishDeniedEvent(
+            &sourceInfo->Name,
+            processId,
+            DgDeleteOperationNamespaceMutation);
+        FltReleaseFileNameInformation(destinationInfo);
+        FltReleaseFileNameInformation(sourceInfo);
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
+    if (replaceIfExists && destinationProtected) {
+        DgPublishDeniedEvent(
+            &destinationInfo->Name,
+            processId,
+            DgDeleteOperationNamespaceMutation);
+        FltReleaseFileNameInformation(destinationInfo);
+        FltReleaseFileNameInformation(sourceInfo);
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
+    FltReleaseFileNameInformation(destinationInfo);
+    FltReleaseFileNameInformation(sourceInfo);
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
 static VOID DgPublishDeniedEvent(
@@ -378,6 +541,38 @@ static BOOLEAN DgPathIsSameOrDescendant(
     }
 
     return candidateChars > RootChars && Candidate->Buffer[RootChars] == L'\\';
+}
+
+static BOOLEAN DgGetProtectingRoot(
+    _In_ PCUNICODE_STRING Name,
+    _Out_opt_ PDG_ROOT_ENTRY Root)
+{
+    ULONG index;
+    BOOLEAN found = FALSE;
+
+    if (Root != NULL) {
+        RtlZeroMemory(Root, sizeof(*Root));
+    }
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&gStateLock);
+
+    for (index = 0; index < DG_MAX_ROOTS; ++index) {
+        if (gRoots[index].Length == 0 ||
+            !DgPathIsSameOrDescendant(Name, gRoots[index].Path, gRoots[index].Length)) {
+            continue;
+        }
+
+        if (Root != NULL) {
+            RtlCopyMemory(Root, &gRoots[index], sizeof(*Root));
+        }
+        found = TRUE;
+        break;
+    }
+
+    ExReleasePushLockShared(&gStateLock);
+    KeLeaveCriticalRegion();
+    return found;
 }
 
 static BOOLEAN DgIsProtectedAndGranted(
