@@ -41,6 +41,10 @@ Use this checklist together with `docs/RUNTIME-VALIDATION.md`.
 - [ ] Agent **Yes** + UAC approval deletes only the displayed target
 - [ ] non-elevated PowerShell attempt follows the same prompt/UAC flow
 - [ ] duplicate rapid attempts do not create an unusable prompt storm
+- [ ] rapid **unique-path** denied deletes produce no more than 3 automatic modal approval prompts within 30 seconds
+- [ ] additional flood events remain denied and are not replayed later as fresh prompts
+- [ ] throttle warning balloon appears at most once per 15 seconds while the flood continues
+- [ ] explicit `deleteguard delete <path>` remains available while automatic prompts are throttled
 
 ## Driver Verifier / stability
 
