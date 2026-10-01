@@ -100,6 +100,7 @@ public static class DeleteGuardRuntimeNativeProbe
     const uint OPEN_EXISTING = 3;
     const uint FILE_ATTRIBUTE_NORMAL = 0x80;
     const uint FILE_FLAG_DELETE_ON_CLOSE = 0x04000000;
+    const uint MOVEFILE_REPLACE_EXISTING = 0x00000001;
     const int FileDispositionInfo = 4;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -117,6 +118,9 @@ public static class DeleteGuardRuntimeNativeProbe
     static extern bool SetFileInformationByHandle(
         SafeFileHandle hFile, int FileInformationClass,
         ref FILE_DISPOSITION_INFO lpFileInformation, uint dwBufferSize);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool MoveFileExW(string lpExistingFileName, string lpNewFileName, uint dwFlags);
 
     public static int TryDispositionDelete(string path)
     {
@@ -139,6 +143,12 @@ public static class DeleteGuardRuntimeNativeProbe
             if (handle.IsInvalid) return Marshal.GetLastWin32Error();
             return 0;
         }
+    }
+
+    public static int TryReplaceMove(string source, string destination)
+    {
+        if (MoveFileExW(source, destination, MOVEFILE_REPLACE_EXISTING)) return 0;
+        return Marshal.GetLastWin32Error();
     }
 }
 '@
@@ -217,9 +227,8 @@ try {
     Assert-StillExists 'protected source move-out denied' $paths.MoveOutSource $(if ($moveOutError) { $moveOutError } else { 'source remained protected' })
     Add-Result 'move-out destination not created' (-not (Test-Path -LiteralPath $paths.MoveOutDestination)) $paths.MoveOutDestination
 
-    $replaceError = $null
-    try { [IO.File]::Move($paths.ReplaceSource, $paths.ReplaceProtectedDestination, $true) } catch { $replaceError = $_.Exception.Message }
-    Assert-StillExists 'protected replace destination preserved' $paths.ReplaceProtectedDestination $(if ($replaceError) { $replaceError } else { 'destination remained protected' })
+    $replaceResult = [DeleteGuardRuntimeNativeProbe]::TryReplaceMove($paths.ReplaceSource, $paths.ReplaceProtectedDestination)
+    Assert-StillExists 'protected replace destination preserved' $paths.ReplaceProtectedDestination "MoveFileEx result=$replaceResult"
     Assert-StillExists 'replace source remains after denial' $paths.ReplaceSource 'source outside protected root must not be consumed'
 
     Start-Sleep -Seconds 2
