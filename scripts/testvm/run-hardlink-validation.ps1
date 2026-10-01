@@ -27,6 +27,7 @@ $replacementTarget = Join-Path $protectedRoot 'replacement-target.txt'
 $approvedTree = Join-Path $protectedRoot 'approved-tree'
 $protected = $false
 $results = [System.Collections.Generic.List[object]]::new()
+$StatusAccessDenied = -1073741790 # 0xC0000022
 
 Assert-DeleteGuardSafeTestPath -Path $caseRoot
 
@@ -35,12 +36,30 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
-using Microsoft.Win32.SafeHandles;
 
 public static class DeleteGuardHardLinkProbe
 {
+    private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+    private const uint FILE_SHARE_READ = 0x00000001;
+    private const uint FILE_SHARE_WRITE = 0x00000002;
+    private const uint FILE_SHARE_DELETE = 0x00000004;
+    private const uint OPEN_EXISTING = 3;
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateHardLink(string newFileName, string existingFileName, IntPtr securityAttributes);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateFile(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
 
     [DllImport("ntdll.dll")]
     private static extern int NtSetInformationFile(
@@ -68,11 +87,20 @@ public static class DeleteGuardHardLinkProbe
 
     public static int ReplaceWithHardLinkStatus(string sourcePath, string targetPath)
     {
-        using (SafeFileHandle handle = File.OpenHandle(
-            sourcePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete))
+        IntPtr handle = CreateFile(
+            Path.GetFullPath(sourcePath),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            IntPtr.Zero,
+            OPEN_EXISTING,
+            0,
+            IntPtr.Zero);
+        if (handle == INVALID_HANDLE_VALUE)
+        {
+            throw new InvalidOperationException("CreateFileW failed: " + Marshal.GetLastWin32Error());
+        }
+
+        try
         {
             string ntTarget = @"\??\" + Path.GetFullPath(targetPath);
             byte[] fileName = Encoding.Unicode.GetBytes(ntTarget);
@@ -94,7 +122,7 @@ public static class DeleteGuardHardLinkProbe
 
                 IO_STATUS_BLOCK iosb;
                 return NtSetInformationFile(
-                    handle.DangerousGetHandle(),
+                    handle,
                     out iosb,
                     buffer,
                     (uint)total,
@@ -104,6 +132,10 @@ public static class DeleteGuardHardLinkProbe
             {
                 Marshal.FreeHGlobal(buffer);
             }
+        }
+        finally
+        {
+            CloseHandle(handle);
         }
     }
 }
@@ -150,7 +182,7 @@ try {
 
     $replaceStatus = [DeleteGuardHardLinkProbe]::ReplaceWithHardLinkStatus($replacementSource, $replacementTarget)
     Add-Result 'replace protected destination with hard link denied' `
-        ($replaceStatus -eq [unchecked]([int]0xC0000022)) `
+        ($replaceStatus -eq $StatusAccessDenied) `
         ("NtSetInformationFile status=0x{0:X8}" -f ([uint32]$replaceStatus))
 
     $hardLinkProbeType = @'
