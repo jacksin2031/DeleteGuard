@@ -13,7 +13,11 @@ public sealed class RelayWorker : BackgroundService
     private readonly ILogger<RelayWorker> _logger;
     private readonly DeniedDeleteEventStore _eventStore;
     private readonly object _clientLock = new();
-    private readonly Dictionary<string, DateTimeOffset> _recent = new(StringComparer.OrdinalIgnoreCase);
+    private readonly RecentEventGate _recent = new(
+        duplicateWindow: TimeSpan.FromSeconds(2),
+        retentionWindow: TimeSpan.FromSeconds(30),
+        maxEntries: 512,
+        comparer: StringComparer.OrdinalIgnoreCase);
     private FilterEventClient? _eventClient;
 
     public RelayWorker(ILogger<RelayWorker> logger, DeniedDeleteEventStore eventStore)
@@ -152,18 +156,9 @@ public sealed class RelayWorker : BackgroundService
         var now = DateTimeOffset.UtcNow;
         var key = $"{driverEvent.ProcessId}|{(uint)driverEvent.Operation}|{driverEvent.Path}";
 
-        if (_recent.TryGetValue(key, out var previous) && now - previous < TimeSpan.FromSeconds(2))
+        if (!_recent.TryAccept(key, now))
         {
             return;
-        }
-
-        _recent[key] = now;
-        if (_recent.Count > 512)
-        {
-            foreach (var stale in _recent.Where(pair => now - pair.Value > TimeSpan.FromSeconds(30)).Select(pair => pair.Key).ToArray())
-            {
-                _recent.Remove(stale);
-            }
         }
 
         var canApprove = NtPathConverter.TryFromNtPath(driverEvent.Path, out var targetPath);
