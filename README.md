@@ -166,6 +166,14 @@ deleteguard unprotect C:\DeleteGuard-Test
 
 The denied-event stream rotates at 4 MiB and retains one previous file.
 
+## VM acceptance kit
+
+See [docs/VM_ACCEPTANCE.md](docs/VM_ACCEPTANCE.md) for read-only preflight,
+disposable-VM fixture tests and the manual loaded-driver release gates.
+`scripts/Test-VmAcceptance.ps1` defaults to preflight; runtime mutation tests require
+`-Mode Run -DisposableVm`, elevated PowerShell, recognized VM hardware and an active driver.
+The kit does not install/sign/load the driver, enable Driver Verifier, or approve desktop prompts.
+
 ## Security scope
 
 DeleteGuard is designed to prevent accidental or unauthorized destructive file operations on configured paths. It is not a backup and does not protect against raw disk writes, partition deletion, formatting, offline attacks, filesystem corruption or physical device failure.

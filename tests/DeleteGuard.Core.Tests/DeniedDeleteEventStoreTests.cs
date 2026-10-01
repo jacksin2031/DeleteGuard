@@ -9,6 +9,13 @@ public sealed class DeniedDeleteEventStoreTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "DeleteGuard.Tests", Guid.NewGuid().ToString("N"));
 
+    public DeniedDeleteEventStoreTests()
+    {
+        // These tests exercise event serialization and reading, not privileged
+        // ProgramData initialization. Supply an existing per-test directory.
+        Directory.CreateDirectory(_directory);
+    }
+
     [Fact]
     public void AppendAndReadLast_RoundTripsEvent()
     {
