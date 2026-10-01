@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
+using DeleteGuard.Core.Driver;
 using DeleteGuard.Core.Models;
 using DeleteGuard.Core.Services;
 
@@ -39,6 +40,7 @@ internal sealed class ApprovalContext : ApplicationContext
     private bool _polling;
     private DateTimeOffset _lastThrottleNoticeUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastUnmappableNoticeUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastRenameNoticeUtc = DateTimeOffset.MinValue;
 
     public ApprovalContext()
     {
@@ -89,16 +91,11 @@ internal sealed class ApprovalContext : ApplicationContext
         {
             foreach (var record in _store.ReadLast(100).OrderBy(record => record.ObservedUtc))
             {
-                // Mark an event known before any filtering so a throttled or stale event
-                // can never be replayed later as a fresh approval opportunity.
                 if (!_known.Add(record.EventId))
                 {
                     continue;
                 }
 
-                // A modal prompt can keep this loop blocked for an arbitrary time.
-                // Re-read the clock for every event so the freshness and rate-limit
-                // decisions reflect the actual time at which UI would be shown.
                 var decisionTime = DateTimeOffset.UtcNow;
                 if (decisionTime - record.ObservedUtc > TimeSpan.FromSeconds(20))
                 {
@@ -107,7 +104,14 @@ internal sealed class ApprovalContext : ApplicationContext
 
                 if (!record.CanApprove)
                 {
-                    ShowUnmappableNotice(record, decisionTime);
+                    if (record.Operation is DriverDeleteOperation.MoveOut or DriverDeleteOperation.ReplaceProtectedDestination)
+                    {
+                        ShowRenameNotice(record, decisionTime);
+                    }
+                    else
+                    {
+                        ShowUnmappableNotice(record, decisionTime);
+                    }
                     continue;
                 }
 
@@ -134,6 +138,25 @@ internal sealed class ApprovalContext : ApplicationContext
             _polling = false;
             _timer.Start();
         }
+    }
+
+    private void ShowRenameNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
+    {
+        if (now - _lastRenameNoticeUtc < TimeSpan.FromSeconds(15))
+        {
+            return;
+        }
+
+        _lastRenameNoticeUtc = now;
+        var description = record.Operation == DriverDeleteOperation.MoveOut
+            ? "DeleteGuard blocked moving protected data outside all protected roots."
+            : "DeleteGuard blocked replacing a protected destination through a rename operation.";
+
+        _notifyIcon.ShowBalloonTip(
+            6000,
+            "DeleteGuard blocked a protected rename",
+            $"{description}\n\nPath: {record.TargetPath}\n\nRename approval is intentionally not mapped to the delete broker. Unprotect or change policy explicitly before performing this operation.",
+            ToolTipIcon.Warning);
     }
 
     private void ShowUnmappableNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
@@ -222,7 +245,6 @@ internal sealed class ApprovalContext : ApplicationContext
         }
         catch (Win32Exception exception) when (exception.NativeErrorCode == 1223)
         {
-            // The user cancelled the UAC prompt. The original delete remains denied.
         }
         catch (Exception exception)
         {
