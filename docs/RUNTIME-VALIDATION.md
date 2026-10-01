@@ -14,6 +14,7 @@ Runtime validation therefore adds:
 - actual minifilter load/unload through Filter Manager;
 - Driver Verifier targeted only at `DeleteGuardFilter.sys`;
 - NTFS deletion attempts from several user-mode paths;
+- destructive rename/move-out and protected-destination replacement checks;
 - Event Relay outage testing;
 - broker grant/concurrent-delete race testing;
 - optional driver unload/reload + ACL fallback testing;
@@ -127,15 +128,6 @@ This checks that:
 - Driver Verifier settings reference `DeleteGuardFilter.sys` when configured;
 - `deleteguard doctor` can report the installed user-mode/kernel state.
 
-You can also inspect the underlying tools directly:
-
-```powershell
-verifier /querysettings
-fltmc filters
-Get-Service DeleteGuardEventRelay
-& "$env:ProgramFiles\DeleteGuard\deleteguard.exe" doctor
-```
-
 Do not run stress validation if the filter or Relay checks fail.
 
 ## 7. Run the automated runtime suite
@@ -152,7 +144,12 @@ The suite creates and destroys data only beneath:
 C:\DeleteGuard-VMTest
 ```
 
-It refuses any destructive target outside that root.
+It refuses any destructive target outside that root. To test move-out safely, the harness creates two siblings below this fixed boundary:
+
+```text
+C:\DeleteGuard-VMTest\protected   # only this child receives DeleteGuard protection
+C:\DeleteGuard-VMTest\outside     # intentionally unprotected sibling
+```
 
 Current automated checks include:
 
@@ -162,12 +159,15 @@ Current automated checks include:
 4. Win32 `SetFileInformationByHandle(FileDispositionInfo)` is denied.
 5. Win32 `FILE_FLAG_DELETE_ON_CLOSE` is denied.
 6. Recursive directory deletion is denied.
-7. Enforcement remains active while Event Relay is stopped.
-8. Repeated denied-delete stress leaves the file intact.
-9. An approved 500-file Broker delete succeeds.
-10. A competing process cannot delete a sentinel during the Broker's scoped grant/ACL-relaxation window.
-11. An explicit approved file delete succeeds.
-12. Kernel denial events reach Event Relay.
+7. Moving a protected source to the unprotected sibling is denied; the source remains and destination is not created.
+8. Renaming an unprotected source with overwrite semantics onto a protected destination is denied; both source and protected destination remain.
+9. Event Relay records `MoveOut` and `ReplaceProtectedDestination` operations and marks both non-approvable.
+10. Enforcement remains active while Event Relay is stopped.
+11. Repeated denied-delete stress leaves the file intact.
+12. An approved 500-file Broker delete succeeds.
+13. A competing process cannot delete a sentinel during the Broker's scoped grant/ACL-relaxation window.
+14. An explicit approved file delete succeeds.
+15. Kernel denial events reach Event Relay.
 
 For an additional driver unload/reload + ACL fallback check:
 
@@ -191,7 +191,7 @@ This part is intentionally not automated because it validates real desktop-sessi
    .\scripts\enable-agent.ps1
    ```
 
-2. Create a fresh disposable root under `C:\DeleteGuard-VMTest`, protect it, and place one file inside.
+2. Create a fresh disposable protected root under `C:\DeleteGuard-VMTest` and place one file inside.
 3. From Explorer, try to delete that file.
 4. Expected first result: Explorer receives Access Denied; DeleteGuard Agent displays the blocked process/path request.
 5. Choose **No**. The file must remain.
@@ -200,8 +200,9 @@ This part is intentionally not automated because it validates real desktop-sessi
 8. Windows UAC must appear for `DeleteGuard.Broker.exe`.
 9. Cancel UAC. The file must remain.
 10. Retry and approve both Agent and UAC. The separate Broker delete should remove only the requested target.
+11. From Explorer, try moving another protected file to the `outside` sibling. The move must remain denied and the Agent must show a non-approvable rename warning rather than a delete/UAC approval dialog.
 
-Repeat the same UX path from a non-elevated PowerShell `Remove-Item` attempt.
+Repeat the delete UX path from a non-elevated PowerShell `Remove-Item` attempt.
 
 ## Crash / verifier acceptance
 
@@ -211,6 +212,9 @@ During runtime tests, any of the following is a release blocker:
 - Driver Verifier violation;
 - filter unload deadlock or hang;
 - unexpected deletion of a protected test file;
+- protected data successfully moving outside all protected roots;
+- a rename-with-replace operation changing a protected destination;
+- a rename denial being presented as an approvable delete;
 - unrelated process gaining delete access during a scoped grant;
 - policy not being restored after Event Relay/driver restart;
 - Agent approval deleting a path different from the displayed target.
