@@ -59,9 +59,11 @@ static VOID DgPublishDeniedEvent(
     _In_ DG_DELETE_OPERATION Operation);
 static BOOLEAN DgPathIsSameOrDescendant(_In_ PCUNICODE_STRING Candidate, _In_reads_(RootChars) const WCHAR *Root, _In_ USHORT RootChars);
 static BOOLEAN DgIsProtectedPath(_In_ PCUNICODE_STRING Name);
-static BOOLEAN DgRenameLeavesProtectedRoot(
+static BOOLEAN DgHasProtectedRoots(VOID);
+static DG_DELETE_OPERATION DgClassifyRename(
     _In_ PCUNICODE_STRING Source,
-    _In_ PCUNICODE_STRING Destination);
+    _In_ PCUNICODE_STRING Destination,
+    _In_ BOOLEAN ReplaceRequested);
 static BOOLEAN DgIsProtectedAndGranted(
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG ProcessId,
@@ -257,20 +259,25 @@ static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data)
     FILE_INFORMATION_CLASS infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
     PVOID buffer = Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
     ULONG length = Data->Iopb->Parameters.SetFileInformation.Length;
+    BOOLEAN requestsDelete = FALSE;
 
     if (buffer == NULL) {
         return FALSE;
     }
 
-    if (infoClass == FileDispositionInformation && length >= sizeof(FILE_DISPOSITION_INFORMATION)) {
-        return ((PFILE_DISPOSITION_INFORMATION)buffer)->DeleteFile ? TRUE : FALSE;
+    __try {
+        if (infoClass == FileDispositionInformation && length >= sizeof(FILE_DISPOSITION_INFORMATION)) {
+            requestsDelete = ((PFILE_DISPOSITION_INFORMATION)buffer)->DeleteFile ? TRUE : FALSE;
+        }
+        else if (infoClass == FileDispositionInformationEx && length >= sizeof(FILE_DISPOSITION_INFORMATION_EX)) {
+            requestsDelete = FlagOn(((PFILE_DISPOSITION_INFORMATION_EX)buffer)->Flags, FILE_DISPOSITION_DELETE) ? TRUE : FALSE;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return FALSE;
     }
 
-    if (infoClass == FileDispositionInformationEx && length >= sizeof(FILE_DISPOSITION_INFORMATION_EX)) {
-        return FlagOn(((PFILE_DISPOSITION_INFORMATION_EX)buffer)->Flags, FILE_DISPOSITION_DELETE) ? TRUE : FALSE;
-    }
-
-    return FALSE;
+    return requestsDelete;
 }
 
 static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
@@ -339,6 +346,11 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRenameBoundary(
     ULONG fileNameLength = 0;
     HANDLE rootDirectory = NULL;
     PWSTR fileNameCopy = NULL;
+    FILE_INFORMATION_CLASS infoClass;
+    BOOLEAN sourceProtected;
+    BOOLEAN replaceRequested = FALSE;
+    DG_DELETE_OPERATION renameOperation = (DG_DELETE_OPERATION)0;
+    PCUNICODE_STRING eventName;
     ULONG processId;
 
     status = FltGetFileNameInformation(
@@ -357,34 +369,62 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRenameBoundary(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (!DgIsProtectedPath(&sourceNameInfo->Name)) {
+    sourceProtected = DgIsProtectedPath(&sourceNameInfo->Name);
+    if (!sourceProtected && !DgHasProtectedRoots()) {
         FltReleaseFileNameInformation(sourceNameInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     if (FltObjects == NULL || FltObjects->Instance == NULL || Data->Iopb->TargetFileObject == NULL) {
-        goto Deny;
+        if (sourceProtected) {
+            renameOperation = DgDeleteOperationRenameOut;
+            goto Deny;
+        }
+        FltReleaseFileNameInformation(sourceNameInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     infoBuffer = Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
     infoLength = Data->Iopb->Parameters.SetFileInformation.Length;
+    infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
     if (infoBuffer == NULL || infoLength < minimumLength) {
-        goto Deny;
+        if (sourceProtected) {
+            renameOperation = DgDeleteOperationRenameOut;
+            goto Deny;
+        }
+        FltReleaseFileNameInformation(sourceNameInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     renameInfo = (PFILE_RENAME_INFORMATION)infoBuffer;
     __try {
         rootDirectory = renameInfo->RootDirectory;
         fileNameLength = renameInfo->FileNameLength;
+        if (infoClass == FileRenameInformationEx) {
+            replaceRequested = FlagOn(renameInfo->Flags, FILE_RENAME_REPLACE_IF_EXISTS) ? TRUE : FALSE;
+        }
+        else {
+            replaceRequested = renameInfo->ReplaceIfExists ? TRUE : FALSE;
+        }
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        goto Deny;
+        if (sourceProtected) {
+            renameOperation = DgDeleteOperationRenameOut;
+            goto Deny;
+        }
+        FltReleaseFileNameInformation(sourceNameInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     if (fileNameLength == 0 ||
         (fileNameLength % sizeof(WCHAR)) != 0 ||
         fileNameLength > (infoLength - minimumLength)) {
-        goto Deny;
+        if (sourceProtected) {
+            renameOperation = DgDeleteOperationRenameOut;
+            goto Deny;
+        }
+        FltReleaseFileNameInformation(sourceNameInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     fileNameCopy = (PWSTR)ExAllocatePool2(
@@ -392,7 +432,12 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRenameBoundary(
         (SIZE_T)fileNameLength + sizeof(WCHAR),
         DG_RENAME_POOL_TAG);
     if (fileNameCopy == NULL) {
-        goto Deny;
+        if (sourceProtected) {
+            renameOperation = DgDeleteOperationRenameOut;
+            goto Deny;
+        }
+        FltReleaseFileNameInformation(sourceNameInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     __try {
@@ -401,7 +446,12 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRenameBoundary(
     __except (EXCEPTION_EXECUTE_HANDLER) {
         ExFreePoolWithTag(fileNameCopy, DG_RENAME_POOL_TAG);
         fileNameCopy = NULL;
-        goto Deny;
+        if (sourceProtected) {
+            renameOperation = DgDeleteOperationRenameOut;
+            goto Deny;
+        }
+        FltReleaseFileNameInformation(sourceNameInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
     fileNameCopy[fileNameLength / sizeof(WCHAR)] = L'\0';
 
@@ -429,10 +479,19 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRenameBoundary(
     fileNameCopy = NULL;
 
     if (!NT_SUCCESS(status) || destinationNameInfo == NULL) {
-        goto Deny;
+        if (sourceProtected) {
+            renameOperation = DgDeleteOperationRenameOut;
+            goto Deny;
+        }
+        FltReleaseFileNameInformation(sourceNameInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (!DgRenameLeavesProtectedRoot(&sourceNameInfo->Name, &destinationNameInfo->Name)) {
+    renameOperation = DgClassifyRename(
+        &sourceNameInfo->Name,
+        &destinationNameInfo->Name,
+        replaceRequested);
+    if (renameOperation == 0) {
         FltReleaseFileNameInformation(destinationNameInfo);
         FltReleaseFileNameInformation(sourceNameInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -442,15 +501,18 @@ Deny:
     if (fileNameCopy != NULL) {
         ExFreePoolWithTag(fileNameCopy, DG_RENAME_POOL_TAG);
     }
-    if (destinationNameInfo != NULL) {
-        FltReleaseFileNameInformation(destinationNameInfo);
+
+    eventName = &sourceNameInfo->Name;
+    if (renameOperation == DgDeleteOperationRenameReplace && destinationNameInfo != NULL) {
+        eventName = &destinationNameInfo->Name;
     }
 
     processId = FltGetRequestorProcessId(Data);
-    DgPublishDeniedEvent(
-        &sourceNameInfo->Name,
-        processId,
-        DgDeleteOperationRenameOut);
+    DgPublishDeniedEvent(eventName, processId, renameOperation);
+
+    if (destinationNameInfo != NULL) {
+        FltReleaseFileNameInformation(destinationNameInfo);
+    }
     FltReleaseFileNameInformation(sourceNameInfo);
 
     Data->IoStatus.Status = STATUS_ACCESS_DENIED;
@@ -548,32 +610,66 @@ static BOOLEAN DgIsProtectedPath(_In_ PCUNICODE_STRING Name)
     return isProtected;
 }
 
-static BOOLEAN DgRenameLeavesProtectedRoot(
-    _In_ PCUNICODE_STRING Source,
-    _In_ PCUNICODE_STRING Destination)
+static BOOLEAN DgHasProtectedRoots(VOID)
 {
     ULONG index;
-    BOOLEAN leavesProtectedRoot = FALSE;
+    BOOLEAN hasRoots = FALSE;
 
     KeEnterCriticalRegion();
     ExAcquirePushLockShared(&gStateLock);
 
     for (index = 0; index < DG_MAX_ROOTS; ++index) {
-        if (gRoots[index].Length == 0 ||
-            !DgPathIsSameOrDescendant(Source, gRoots[index].Path, gRoots[index].Length)) {
-            continue;
+        if (gRoots[index].Length != 0) {
+            hasRoots = TRUE;
+            break;
         }
-
-        leavesProtectedRoot = !DgPathIsSameOrDescendant(
-            Destination,
-            gRoots[index].Path,
-            gRoots[index].Length);
-        break;
     }
 
     ExReleasePushLockShared(&gStateLock);
     KeLeaveCriticalRegion();
-    return leavesProtectedRoot;
+    return hasRoots;
+}
+
+static DG_DELETE_OPERATION DgClassifyRename(
+    _In_ PCUNICODE_STRING Source,
+    _In_ PCUNICODE_STRING Destination,
+    _In_ BOOLEAN ReplaceRequested)
+{
+    ULONG index;
+    LONG sourceRoot = -1;
+    LONG destinationRoot = -1;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&gStateLock);
+
+    for (index = 0; index < DG_MAX_ROOTS; ++index) {
+        if (gRoots[index].Length == 0) {
+            continue;
+        }
+
+        if (sourceRoot < 0 &&
+            DgPathIsSameOrDescendant(Source, gRoots[index].Path, gRoots[index].Length)) {
+            sourceRoot = (LONG)index;
+        }
+
+        if (destinationRoot < 0 &&
+            DgPathIsSameOrDescendant(Destination, gRoots[index].Path, gRoots[index].Length)) {
+            destinationRoot = (LONG)index;
+        }
+    }
+
+    ExReleasePushLockShared(&gStateLock);
+    KeLeaveCriticalRegion();
+
+    if (sourceRoot >= 0 && sourceRoot != destinationRoot) {
+        return DgDeleteOperationRenameOut;
+    }
+
+    if (ReplaceRequested && (sourceRoot >= 0 || destinationRoot >= 0)) {
+        return DgDeleteOperationRenameReplace;
+    }
+
+    return (DG_DELETE_OPERATION)0;
 }
 
 static BOOLEAN DgIsProtectedAndGranted(
