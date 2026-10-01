@@ -65,6 +65,7 @@ typedef struct _DG_ROOT_ENTRY {
 
 typedef struct _DG_GRANT_ENTRY {
     ULONG ProcessId;
+    ULONGLONG ProcessStartKey;
     ULONGLONG ExpiresAt100ns;
     USHORT Length;
     WCHAR Path[DG_MAX_PATH_CHARS];
