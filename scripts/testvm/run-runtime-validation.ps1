@@ -145,14 +145,18 @@ try {
     $eventFile = Join-Path $reportDirectory 'denied-events.jsonl'
     $eventBefore = if (Test-Path -LiteralPath $eventFile) { (Get-Item -LiteralPath $eventFile).LastWriteTimeUtc } else { [DateTime]::MinValue }
 
+    $psError = $null
     try { Remove-Item -LiteralPath $paths.PowerShell -Force -ErrorAction Stop } catch { $psError = $_.Exception.Message }
-    Assert-StillExists 'PowerShell Remove-Item denied' $paths.PowerShell ($psError ?? 'file remained protected')
+    $psDetail = if ($psError) { $psError } else { 'file remained protected' }
+    Assert-StillExists 'PowerShell Remove-Item denied' $paths.PowerShell $psDetail
 
     & cmd.exe /d /c "del /f /q `"$($paths.Cmd)`"" 2>&1 | Out-Null
     Assert-StillExists 'cmd del denied' $paths.Cmd "cmd exit=$LASTEXITCODE"
 
+    $dotnetError = $null
     try { [IO.File]::Delete($paths.DotNet) } catch { $dotnetError = $_.Exception.Message }
-    Assert-StillExists '.NET File.Delete denied' $paths.DotNet ($dotnetError ?? 'file remained protected')
+    $dotnetDetail = if ($dotnetError) { $dotnetError } else { 'file remained protected' }
+    Assert-StillExists '.NET File.Delete denied' $paths.DotNet $dotnetDetail
 
     if (-not ('DeleteGuardRuntimeNativeProbe' -as [type])) {
         Add-Type -TypeDefinition $interopSource -Language CSharp
@@ -168,8 +172,10 @@ try {
 
     Stop-Service -Name 'DeleteGuardEventRelay' -Force
     (Get-Service -Name 'DeleteGuardEventRelay').WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+    $relayDownError = $null
     try { [IO.File]::Delete($paths.RelayDown) } catch { $relayDownError = $_.Exception.Message }
-    Assert-StillExists 'enforcement survives Relay outage' $paths.RelayDown ($relayDownError ?? 'file remained protected')
+    $relayDetail = if ($relayDownError) { $relayDownError } else { 'file remained protected' }
+    Assert-StillExists 'enforcement survives Relay outage' $paths.RelayDown $relayDetail
     Start-Service -Name 'DeleteGuardEventRelay'
     (Get-Service -Name 'DeleteGuardEventRelay').WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
     Start-Sleep -Seconds 2
@@ -201,8 +207,10 @@ try {
     if ($IncludeDriverReload) {
         & fltmc.exe unload DeleteGuardFilter | Out-Host
         if ($LASTEXITCODE -ne 0) { throw 'Failed to unload DeleteGuardFilter for fallback validation.' }
+        $reloadError = $null
         try { [IO.File]::Delete($paths.ReloadFallback) } catch { $reloadError = $_.Exception.Message }
-        Assert-StillExists 'ACL fallback survives driver unload' $paths.ReloadFallback ($reloadError ?? 'file remained protected')
+        $reloadDetail = if ($reloadError) { $reloadError } else { 'file remained protected' }
+        Assert-StillExists 'ACL fallback survives driver unload' $paths.ReloadFallback $reloadDetail
         & fltmc.exe load DeleteGuardFilter | Out-Host
         if ($LASTEXITCODE -ne 0) { throw 'Failed to reload DeleteGuardFilter.' }
         Wait-DeleteGuardFilterLoaded
