@@ -25,7 +25,11 @@ public sealed class DeniedDeleteEventStore
         ArgumentNullException.ThrowIfNull(record);
         var directory = Path.GetDirectoryName(EventFile)
             ?? throw new InvalidOperationException("Unable to resolve DeleteGuard event directory.");
-        RuntimePaths.EnsureSecureDataDirectory(directory);
+
+        if (!Directory.Exists(directory))
+        {
+            RuntimePaths.EnsureSecureDataDirectory(directory);
+        }
 
         var line = JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine;
         lock (_writeLock)
