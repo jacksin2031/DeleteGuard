@@ -30,6 +30,7 @@ public sealed class DriverProtocolTests
         Assert.Equal(2u, (uint)DriverDeleteOperation.DeleteOnClose);
         Assert.Equal(3u, (uint)DriverDeleteOperation.MoveOut);
         Assert.Equal(4u, (uint)DriverDeleteOperation.ReplaceProtectedDestination);
+        Assert.Equal(5u, (uint)DriverDeleteOperation.RenameProtectedAncestor);
     }
 
     [Fact]
