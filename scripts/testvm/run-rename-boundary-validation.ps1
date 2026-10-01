@@ -65,6 +65,26 @@ try {
 
     $attackJob = Start-Job -ScriptBlock {
         param($MoveSource, $MoveDestination, $ReplaceSource, $ReplaceTarget, $Attempts)
+
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class DeleteGuardRenameProbe
+{
+    const uint MOVEFILE_REPLACE_EXISTING = 0x00000001;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool MoveFileExW(string existingFileName, string newFileName, uint flags);
+
+    public static int TryReplace(string source, string destination)
+    {
+        if (MoveFileExW(source, destination, MOVEFILE_REPLACE_EXISTING)) return 0;
+        return Marshal.GetLastWin32Error();
+    }
+}
+'@
+
         for ($i = 0; $i -lt $Attempts; $i++) {
             try {
                 if ([IO.File]::Exists($MoveSource) -and -not [IO.File]::Exists($MoveDestination)) {
@@ -75,7 +95,7 @@ try {
 
             try {
                 if ([IO.File]::Exists($ReplaceSource)) {
-                    Move-Item -LiteralPath $ReplaceSource -Destination $ReplaceTarget -Force -ErrorAction Stop
+                    [void][DeleteGuardRenameProbe]::TryReplace($ReplaceSource, $ReplaceTarget)
                 }
             }
             catch { }
