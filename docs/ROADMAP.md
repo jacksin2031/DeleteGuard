@@ -70,16 +70,30 @@ Release gate remaining: execute the harness in an actual disposable Windows 11 V
 - Enforcement uses Filter Manager requestor identity rather than current-thread process identity.
 - No long-lived `EPROCESS` reference is retained.
 
-## v0.2.5 namespace-escape gate — in validation
+## v0.2.5 namespace-escape gate — build-verified, runtime gate pending
 
 - Gate rename/move namespace mutations in `IRP_MJ_SET_INFORMATION`.
 - Deny a protected source moving outside its protecting root.
 - Deny rename-with-replace when the destination is protected.
 - Delete grants deliberately do not authorize namespace mutations.
 - Namespace denials are visible but never auto-approvable by the Agent.
+- Set-information buffers are probed/copied before use; variable rename filenames use stable nonpaged kernel copies.
 - Disposable-VM harness includes move-out and replace-destination race tests during an approved Broker delete window.
 
-Release gate: WDK/.NET CI plus loaded-driver namespace race validation under Driver Verifier.
+Remaining gate: loaded-driver namespace race validation under Driver Verifier.
+
+## v0.2.6 hard-link alias containment — in validation
+
+- Gate `FileLinkInformation`, `FileLinkInformationBypassAccessCheck`, `FileLinkInformationEx`, and `FileLinkInformationExBypassAccessCheck`.
+- Protected files may gain hard-link aliases only inside the same protecting root.
+- Link-with-replace cannot replace a protected destination.
+- Rename and hard-link operations share one safe namespace-target capture and destination-resolution path.
+- Namespace hard-link denials remain non-approvable by the Agent.
+- Managed tests lock protocol enum values as well as structure sizes.
+- CI compiles `HardLinkProbe.cs` under Windows PowerShell 5.1 in addition to parsing test-VM scripts.
+- Disposable-VM hard-link harness verifies external alias denial, same-root allow behavior, native replace-existing denial, and an ACL-relaxation race.
+
+Remaining gate: complete WDK/.NET CI for the final head, then execute hard-link runtime validation under Driver Verifier in a deliberately disposable Windows 11 VM.
 
 ## v0.3 volume protection
 
