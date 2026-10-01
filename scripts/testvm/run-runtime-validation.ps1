@@ -25,7 +25,12 @@ $reportDirectory = Join-Path $env:ProgramData 'DeleteGuard'
 $reportPath = Join-Path $reportDirectory ("runtime-validation-{0}.json" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $sentinelName = '.deleteguard-runtime-test-root'
 $sentinelPath = Join-Path $script:DeleteGuardTestRoot $sentinelName
+$protectedRoot = Join-Path $script:DeleteGuardTestRoot 'Protected'
+$outsideRoot = Join-Path $script:DeleteGuardTestRoot 'Outside'
 $protected = $false
+
+Assert-DeleteGuardSafeTestPath -Path $protectedRoot
+Assert-DeleteGuardSafeTestPath -Path $outsideRoot
 
 function Add-Result {
     param([string]$Name, [bool]$Passed, [string]$Detail)
@@ -51,7 +56,7 @@ function Remove-PreviousSafeRoot {
         throw "Refusing to reuse existing $script:DeleteGuardTestRoot because the DeleteGuard test sentinel is absent."
     }
 
-    try { Invoke-DeleteGuardBroker -Command unprotect -Path $script:DeleteGuardTestRoot } catch { }
+    try { Invoke-DeleteGuardBroker -Command unprotect -Path $protectedRoot } catch { }
     Remove-Item -LiteralPath $script:DeleteGuardTestRoot -Recurse -Force
 }
 
@@ -115,31 +120,35 @@ public static class DeleteGuardRuntimeNativeProbe
 try {
     Remove-PreviousSafeRoot
     New-Item -ItemType Directory -Path $script:DeleteGuardTestRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $protectedRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $outsideRoot -Force | Out-Null
     Set-Content -LiteralPath $sentinelPath -Value 'DeleteGuard disposable VM runtime test root' -Encoding UTF8
 
     $paths = @{
-        PowerShell = Join-Path $script:DeleteGuardTestRoot 'powershell-delete.txt'
-        Cmd = Join-Path $script:DeleteGuardTestRoot 'cmd-delete.txt'
-        DotNet = Join-Path $script:DeleteGuardTestRoot 'dotnet-delete.txt'
-        Win32Disposition = Join-Path $script:DeleteGuardTestRoot 'win32-disposition.txt'
-        DeleteOnClose = Join-Path $script:DeleteGuardTestRoot 'delete-on-close.txt'
-        RelayDown = Join-Path $script:DeleteGuardTestRoot 'relay-down.txt'
-        Stress = Join-Path $script:DeleteGuardTestRoot 'stress.txt'
-        RaceSentinel = Join-Path $script:DeleteGuardTestRoot 'race-sentinel.txt'
-        ApprovedFile = Join-Path $script:DeleteGuardTestRoot 'approved-file.txt'
-        ReloadFallback = Join-Path $script:DeleteGuardTestRoot 'reload-fallback.txt'
+        PowerShell = Join-Path $protectedRoot 'powershell-delete.txt'
+        Cmd = Join-Path $protectedRoot 'cmd-delete.txt'
+        DotNet = Join-Path $protectedRoot 'dotnet-delete.txt'
+        Win32Disposition = Join-Path $protectedRoot 'win32-disposition.txt'
+        DeleteOnClose = Join-Path $protectedRoot 'delete-on-close.txt'
+        RelayDown = Join-Path $protectedRoot 'relay-down.txt'
+        Stress = Join-Path $protectedRoot 'stress.txt'
+        RaceSentinel = Join-Path $protectedRoot 'race-sentinel.txt'
+        RenameRaceSentinel = Join-Path $protectedRoot 'rename-race-sentinel.txt'
+        ApprovedFile = Join-Path $protectedRoot 'approved-file.txt'
+        ReloadFallback = Join-Path $protectedRoot 'reload-fallback.txt'
     }
+    $renameEscapePath = Join-Path $outsideRoot 'rename-race-escaped.txt'
 
     foreach ($path in $paths.Values) { Set-Content -LiteralPath $path -Value 'DeleteGuard runtime test' -Encoding UTF8 }
-    $directoryCase = Join-Path $script:DeleteGuardTestRoot 'recursive-directory'
+    $directoryCase = Join-Path $protectedRoot 'recursive-directory'
     New-Item -ItemType Directory -Path $directoryCase -Force | Out-Null
     1..20 | ForEach-Object { Set-Content -LiteralPath (Join-Path $directoryCase "file-$_.txt") -Value $_ }
 
-    $approvedTree = Join-Path $script:DeleteGuardTestRoot 'approved-race-tree'
+    $approvedTree = Join-Path $protectedRoot 'approved-race-tree'
     New-Item -ItemType Directory -Path $approvedTree -Force | Out-Null
     1..500 | ForEach-Object { Set-Content -LiteralPath (Join-Path $approvedTree ("file-{0:D4}.txt" -f $_)) -Value $_ }
 
-    Invoke-DeleteGuardBroker -Command protect -Path $script:DeleteGuardTestRoot
+    Invoke-DeleteGuardBroker -Command protect -Path $protectedRoot
     $protected = $true
 
     $eventFile = Join-Path $reportDirectory 'denied-events.jsonl'
@@ -186,12 +195,18 @@ try {
     Assert-StillExists 'repeated denied-delete stress' $paths.Stress "attempts=$StressAttempts"
 
     $raceJob = Start-Job -ScriptBlock {
-        param($Path)
+        param($DeletePath, $RenameSource, $RenameDestination)
         for ($i = 0; $i -lt 600; $i++) {
-            try { [IO.File]::Delete($Path) } catch { }
+            try { [IO.File]::Delete($DeletePath) } catch { }
+            try {
+                if ([IO.File]::Exists($RenameSource) -and -not [IO.File]::Exists($RenameDestination)) {
+                    [IO.File]::Move($RenameSource, $RenameDestination)
+                }
+            }
+            catch { }
             Start-Sleep -Milliseconds 3
         }
-    } -ArgumentList $paths.RaceSentinel
+    } -ArgumentList $paths.RaceSentinel, $paths.RenameRaceSentinel, $renameEscapePath
 
     try {
         Invoke-DeleteGuardBroker -Command delete -Path $approvedTree
@@ -202,7 +217,9 @@ try {
         Remove-Job -Job $raceJob -Force -ErrorAction SilentlyContinue
     }
     Add-Result 'approved broker recursive delete' (-not (Test-Path -LiteralPath $approvedTree)) '500-file approved tree'
-    Assert-StillExists 'scoped grant blocks competing process' $paths.RaceSentinel 'competing process attempted deletion during broker grant window'
+    Assert-StillExists 'scoped grant blocks competing process delete' $paths.RaceSentinel 'competing process attempted deletion during broker grant window'
+    Assert-StillExists 'rename-out blocked during ACL relaxation' $paths.RenameRaceSentinel 'competing process attempted to move protected file outside protected root during broker grant window'
+    Add-Result 'rename-out destination never created' (-not (Test-Path -LiteralPath $renameEscapePath)) $renameEscapePath
 
     if ($IncludeDriverReload) {
         & fltmc.exe unload DeleteGuardFilter | Out-Host
@@ -224,14 +241,27 @@ try {
     Start-Sleep -Seconds 2
     $eventAfter = if (Test-Path -LiteralPath $eventFile) { (Get-Item -LiteralPath $eventFile).LastWriteTimeUtc } else { [DateTime]::MinValue }
     Add-Result 'kernel denial events reached Event Relay' ($eventAfter -gt $eventBefore) "event stream lastWrite=$eventAfter"
+
+    $renameEvents = @()
+    if (Test-Path -LiteralPath $eventFile) {
+        $renameEvents = @(Get-Content -LiteralPath $eventFile | ForEach-Object {
+            try { $_ | ConvertFrom-Json } catch { $null }
+        } | Where-Object {
+            $_ -and $_.operation -eq 3 -and $_.targetPath -eq $paths.RenameRaceSentinel
+        })
+    }
+    Add-Result 'rename-out denial reached Event Relay' ($renameEvents.Count -gt 0) "matching events=$($renameEvents.Count)"
+    if ($renameEvents.Count -gt 0) {
+        Add-Result 'rename-out event is non-approvable' (-not [bool]$renameEvents[-1].canApprove) "canApprove=$($renameEvents[-1].canApprove)"
+    }
 }
 catch {
     Add-Result 'runtime harness' $false $_.Exception.ToString()
 }
 finally {
     try {
-        if ($protected -and (Test-Path -LiteralPath $script:DeleteGuardTestRoot)) {
-            Invoke-DeleteGuardBroker -Command unprotect -Path $script:DeleteGuardTestRoot
+        if ($protected -and (Test-Path -LiteralPath $protectedRoot)) {
+            Invoke-DeleteGuardBroker -Command unprotect -Path $protectedRoot
             $protected = $false
         }
     }
