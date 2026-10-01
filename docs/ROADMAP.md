@@ -86,10 +86,13 @@ Implemented on the stacked development branch:
 
 - intercept `FileRenameInformation` and `FileRenameInformationEx`;
 - resolve destination paths with `FltGetDestinationFileNameInformation`;
-- allow protected-source renames only when the destination remains under the same protected root;
+- block a protected source from moving into a different or unprotected root;
+- block replace-existing rename operations whenever the source or destination touches protected scope, including outside-to-protected overwrite attempts;
+- allow ordinary non-replace renames that remain inside the same protected root;
 - fail closed when a protected source has an invalid/unresolvable rename destination;
-- emit `RenameOut` denial events without converting them into delete approval/UAC prompts;
-- extend the disposable-VM race harness to attempt rename-out while the Broker temporarily relaxes the ACL.
+- emit distinct `RenameOut` and `RenameReplace` operation codes while keeping protocol-v3 structure sizes unchanged;
+- never convert destructive rename denials into delete approval/UAC prompts;
+- extend disposable-VM validation with move-out and replace-existing attacks during the Broker ACL-relaxation window.
 
 Release gate remaining: execute the complete stacked harness in an actual disposable Windows 11 VM, retain runtime report/dumps/verifier evidence, complete the manual Explorer/Agent/UAC checklist, and resolve any loaded-driver findings before promoting the minifilter stack.
 
