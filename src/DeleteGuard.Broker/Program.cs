@@ -1,4 +1,5 @@
 using System.Security.Principal;
+using DeleteGuard.Core.Driver;
 using DeleteGuard.Core.Models;
 using DeleteGuard.Core.Security;
 using DeleteGuard.Core.Services;
@@ -81,7 +82,7 @@ internal static class Program
         var attributes = File.GetAttributes(path);
         if (attributes.HasFlag(FileAttributes.ReparsePoint))
         {
-            throw new NotSupportedException("Protecting a reparse-point root is not supported in the MVP.");
+            throw new NotSupportedException("Protecting a reparse-point root is not supported.");
         }
 
         AclProtector.EnsureNtfs(path);
@@ -95,6 +96,7 @@ internal static class Program
         if (existing is not null)
         {
             Console.WriteLine($"Already protected: {path}");
+            TrySyncDriverPolicies();
             return 0;
         }
 
@@ -103,7 +105,7 @@ internal static class Program
             PathRules.IsSameOrDescendant(policy.RootPath, path));
         if (overlap is not null)
         {
-            throw new InvalidOperationException($"Overlapping protection roots are not supported in the MVP. Existing root: {overlap.RootPath}");
+            throw new InvalidOperationException($"Overlapping protection roots are not supported. Existing root: {overlap.RootPath}");
         }
 
         if (AclProtector.HasGuardRule(path))
@@ -142,8 +144,16 @@ internal static class Program
             throw;
         }
 
-        WriteAudit("protect", path, "allowed", "guard ACL inserted");
+        var driverSynced = TrySyncDriverPolicies();
+        WriteAudit(
+            "protect",
+            path,
+            "allowed",
+            driverSynced ? "guard ACL inserted; minifilter synced" : "guard ACL inserted; minifilter unavailable");
         Console.WriteLine($"Protected: {path}");
+        Console.WriteLine(driverSynced
+            ? "Kernel enforcement: active"
+            : "Kernel enforcement: unavailable; ACL fallback remains active");
         return 0;
     }
 
@@ -158,7 +168,12 @@ internal static class Program
         }
 
         Store.Remove(policy.Id);
-        WriteAudit("unprotect", path, "allowed", null);
+        var driverSynced = TrySyncDriverPolicies();
+        WriteAudit(
+            "unprotect",
+            path,
+            "allowed",
+            driverSynced ? "minifilter synced" : "minifilter unavailable");
         Console.WriteLine($"Unprotected: {path}");
         return 0;
     }
@@ -178,9 +193,22 @@ internal static class Program
             PathRules.Normalize(policy.RootPath),
             StringComparison.OrdinalIgnoreCase);
 
+        FilterPortClient? driver = null;
+        var driverGrantActive = false;
         var deleteSucceeded = false;
+        var processId = checked((uint)Environment.ProcessId);
+
         try
         {
+            if (FilterPortClient.TryConnect(out driver) && driver is not null)
+            {
+                // Synchronize before the ACL is ever relaxed. If the driver is present but
+                // rejects synchronization/granting, fail closed instead of silently falling back.
+                driver.SyncPolicies(Store.Load());
+                driver.GrantDelete(processId, path, TimeSpan.FromSeconds(15));
+                driverGrantActive = true;
+            }
+
             if (policy.InsertedAclRule && Directory.Exists(policy.RootPath))
             {
                 AclProtector.Remove(policy.RootPath);
@@ -207,11 +235,63 @@ internal static class Program
             {
                 AclProtector.Apply(policy.RootPath);
             }
+
+            if (driver is not null)
+            {
+                try
+                {
+                    if (driverGrantActive)
+                    {
+                        driver.RevokeDelete(processId, path);
+                    }
+
+                    driver.SyncPolicies(Store.Load());
+                }
+                catch (Exception exception)
+                {
+                    TryAudit(new AuditEntry
+                    {
+                        TimestampUtc = DateTimeOffset.UtcNow,
+                        Action = "driver-cleanup",
+                        TargetPath = path,
+                        Result = "error",
+                        ActorSid = CurrentSid(),
+                        Detail = exception.ToString()
+                    });
+                }
+                finally
+                {
+                    driver.Dispose();
+                }
+            }
         }
 
-        WriteAudit("delete", path, "allowed", deletingRoot ? "protected root deleted" : $"policy={policy.Id}");
+        WriteAudit(
+            "delete",
+            path,
+            "allowed",
+            driverGrantActive
+                ? $"kernel-grant pid={processId}; policy={policy.Id}"
+                : $"acl-fallback; policy={policy.Id}");
         Console.WriteLine($"Deleted: {path}");
+        Console.WriteLine(driverGrantActive
+            ? "Kernel grant: used and revoked"
+            : "Kernel grant: minifilter unavailable; ACL fallback path used");
         return 0;
+    }
+
+    private static bool TrySyncDriverPolicies()
+    {
+        if (!FilterPortClient.TryConnect(out var driver) || driver is null)
+        {
+            return false;
+        }
+
+        using (driver)
+        {
+            driver.SyncPolicies(Store.Load());
+            return true;
+        }
     }
 
     private static void ValidateVolumeRoot(string path, IReadOnlyCollection<string> options)
@@ -225,7 +305,7 @@ internal static class Program
             ?? throw new InvalidOperationException("Unable to resolve system volume.");
         if (string.Equals(PathRules.Normalize(path), PathRules.Normalize(systemRoot), StringComparison.OrdinalIgnoreCase))
         {
-            throw new NotSupportedException("DeleteGuard MVP refuses to protect the Windows system-volume root.");
+            throw new NotSupportedException("DeleteGuard refuses to protect the Windows system-volume root.");
         }
 
         if (!options.Any(option => string.Equals(option, "--allow-volume-root", StringComparison.OrdinalIgnoreCase)))
