@@ -54,7 +54,11 @@ static VOID DgPublishDeniedEvent(
     _In_ ULONG ProcessId,
     _In_ DG_DELETE_OPERATION Operation);
 static BOOLEAN DgPathIsSameOrDescendant(_In_ PCUNICODE_STRING Candidate, _In_reads_(RootChars) const WCHAR *Root, _In_ USHORT RootChars);
-static BOOLEAN DgIsProtectedAndGranted(_In_ PCUNICODE_STRING Name, _In_ ULONG ProcessId, _Out_ PBOOLEAN Granted);
+static BOOLEAN DgIsProtectedAndGranted(
+    _In_ PCUNICODE_STRING Name,
+    _In_ ULONG ProcessId,
+    _In_ ULONGLONG ProcessStartKey,
+    _Out_ PBOOLEAN Granted);
 static NTSTATUS DgReadCommandPath(_In_ const DG_COMMAND *Command, _Out_ PUSHORT LengthChars);
 static NTSTATUS DgAddRoot(_In_ const DG_COMMAND *Command);
 static NTSTATUS DgRemoveRoot(_In_ const DG_COMMAND *Command);
@@ -261,9 +265,17 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
 {
     NTSTATUS status;
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
+    PEPROCESS requestorProcess;
     BOOLEAN granted = FALSE;
     BOOLEAN isProtected;
-    ULONG processId = HandleToULong(PsGetCurrentProcessId());
+    ULONG processId;
+    ULONGLONG processStartKey = 0;
+
+    processId = FltGetRequestorProcessId(Data);
+    requestorProcess = FltGetRequestorProcess(Data);
+    if (requestorProcess != NULL) {
+        processStartKey = PsGetProcessStartKey(requestorProcess);
+    }
 
     status = FltGetFileNameInformation(
         Data,
@@ -281,7 +293,11 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    isProtected = DgIsProtectedAndGranted(&nameInfo->Name, processId, &granted);
+    isProtected = DgIsProtectedAndGranted(
+        &nameInfo->Name,
+        processId,
+        processStartKey,
+        &granted);
     if (!isProtected || granted) {
         FltReleaseFileNameInformation(nameInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -367,6 +383,7 @@ static BOOLEAN DgPathIsSameOrDescendant(
 static BOOLEAN DgIsProtectedAndGranted(
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG ProcessId,
+    _In_ ULONGLONG ProcessStartKey,
     _Out_ PBOOLEAN Granted)
 {
     ULONG index;
@@ -390,6 +407,7 @@ static BOOLEAN DgIsProtectedAndGranted(
         for (index = 0; index < DG_MAX_GRANTS; ++index) {
             if (gGrants[index].Length == 0 ||
                 gGrants[index].ProcessId != ProcessId ||
+                gGrants[index].ProcessStartKey != ProcessStartKey ||
                 gGrants[index].ExpiresAt100ns <= now) {
                 continue;
             }
@@ -716,10 +734,12 @@ static NTSTATUS DgRemoveRoot(_In_ const DG_COMMAND *Command)
 static NTSTATUS DgGrant(_In_ const DG_COMMAND *Command)
 {
     NTSTATUS status;
+    PEPROCESS process = NULL;
     USHORT lengthChars;
     ULONG index;
     LONG slot = -1;
     ULONGLONG now;
+    ULONGLONG processStartKey;
 
     status = DgReadCommandPath(Command, &lengthChars);
     if (!NT_SUCCESS(status)) {
@@ -729,6 +749,15 @@ static NTSTATUS DgGrant(_In_ const DG_COMMAND *Command)
     if (Command->ProcessId == 0 || Command->TtlMilliseconds == 0 || Command->TtlMilliseconds > 30000) {
         return STATUS_INVALID_PARAMETER;
     }
+
+    status = PsLookupProcessByProcessId(ULongToHandle(Command->ProcessId), &process);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    processStartKey = PsGetProcessStartKey(process);
+    ObDereferenceObject(process);
+    process = NULL;
 
     now = KeQueryInterruptTime();
 
@@ -749,6 +778,7 @@ static NTSTATUS DgGrant(_In_ const DG_COMMAND *Command)
 
     RtlZeroMemory(&gGrants[slot], sizeof(gGrants[slot]));
     gGrants[slot].ProcessId = Command->ProcessId;
+    gGrants[slot].ProcessStartKey = processStartKey;
     gGrants[slot].ExpiresAt100ns = now + ((ULONGLONG)Command->TtlMilliseconds * 10000ULL);
     gGrants[slot].Length = lengthChars;
     RtlCopyMemory(gGrants[slot].Path, Command->Path, lengthChars * sizeof(WCHAR));
