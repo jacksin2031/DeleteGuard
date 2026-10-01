@@ -22,6 +22,16 @@ public sealed class DriverProtocolTests
     }
 
     [Fact]
+    public void OperationValues_RemainAbiStable()
+    {
+        Assert.Equal(3u, DriverProtocol.Version);
+        Assert.Equal(1u, (uint)DriverDeleteOperation.Disposition);
+        Assert.Equal(2u, (uint)DriverDeleteOperation.DeleteOnClose);
+        Assert.Equal(3u, (uint)DriverDeleteOperation.RenameOut);
+        Assert.Equal(4u, (uint)DriverDeleteOperation.RenameReplace);
+    }
+
+    [Fact]
     public void CommandCreate_RejectsOversizedPath()
     {
         var path = new string('x', DriverProtocol.MaxPathChars);
