@@ -13,17 +13,21 @@ if (-not (Test-DeleteGuardFilterLoaded)) {
     throw 'DeleteGuardFilter is not loaded. Run install-test-stack.ps1 first.'
 }
 
-$protectedRoot = Join-Path $script:DeleteGuardTestRoot 'Protected'
-$escapeRoot = Join-Path $script:DeleteGuardTestRoot 'Escape'
+$caseRoot = Join-Path $script:DeleteGuardTestRoot 'NamespaceCase'
+$caseSentinel = Join-Path $caseRoot '.deleteguard-namespace-test-case'
+$protectedRoot = Join-Path $caseRoot 'Protected'
+$escapeRoot = Join-Path $caseRoot 'Escape'
 $sentinelPath = Join-Path $protectedRoot 'race-sentinel.txt'
 $escapeSentinelPath = Join-Path $escapeRoot 'race-sentinel.txt'
 $ordinaryMoveSource = Join-Path $protectedRoot 'ordinary-move.txt'
 $ordinaryMoveDestination = Join-Path $escapeRoot 'ordinary-move.txt'
-$replaceSource = Join-Path $script:DeleteGuardTestRoot 'replacement-source.txt'
+$replaceSource = Join-Path $caseRoot 'replacement-source.txt'
 $replaceTarget = Join-Path $protectedRoot 'replacement-target.txt'
 $approvedTree = Join-Path $protectedRoot 'approved-tree'
 $protected = $false
 $results = [System.Collections.Generic.List[object]]::new()
+
+Assert-DeleteGuardSafeTestPath -Path $caseRoot
 
 function Add-Result {
     param([string]$Name, [bool]$Passed, [string]$Detail)
@@ -32,18 +36,16 @@ function Add-Result {
 }
 
 try {
-    if (Test-Path -LiteralPath $script:DeleteGuardTestRoot) {
-        $rootItem = Get-Item -LiteralPath $script:DeleteGuardTestRoot -Force
-        if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw 'Refusing namespace validation because the test root is a reparse point.'
+    if (Test-Path -LiteralPath $caseRoot) {
+        if (-not (Test-Path -LiteralPath $caseSentinel)) {
+            throw "Refusing to reuse $caseRoot because its namespace-test sentinel is missing."
         }
-    }
-    else {
-        New-Item -ItemType Directory -Path $script:DeleteGuardTestRoot | Out-Null
+        Remove-Item -LiteralPath $caseRoot -Recurse -Force
     }
 
     New-Item -ItemType Directory -Path $protectedRoot -Force | Out-Null
     New-Item -ItemType Directory -Path $escapeRoot -Force | Out-Null
+    Set-Content -LiteralPath $caseSentinel -Value 'DeleteGuard namespace validation case root'
     Set-Content -LiteralPath $ordinaryMoveSource -Value 'ordinary protected source'
     Set-Content -LiteralPath $sentinelPath -Value 'must remain protected'
     Set-Content -LiteralPath $replaceSource -Value 'attacker replacement payload'
@@ -121,9 +123,12 @@ finally {
         try { Invoke-DeleteGuardBroker -Command unprotect -Path $protectedRoot } catch { Write-Warning $_.Exception.Message }
     }
 
-    if (Test-Path -LiteralPath $script:DeleteGuardTestRoot) {
-        Assert-DeleteGuardSafeTestPath -Path $script:DeleteGuardTestRoot
-        Remove-Item -LiteralPath $script:DeleteGuardTestRoot -Recurse -Force
+    if (Test-Path -LiteralPath $caseRoot) {
+        Assert-DeleteGuardSafeTestPath -Path $caseRoot
+        if (-not (Test-Path -LiteralPath $caseSentinel)) {
+            throw "Refusing cleanup of $caseRoot because its namespace-test sentinel is missing."
+        }
+        Remove-Item -LiteralPath $caseRoot -Recurse -Force
     }
 }
 
