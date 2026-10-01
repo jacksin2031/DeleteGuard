@@ -22,6 +22,27 @@ public sealed class DriverProtocolTests
     }
 
     [Fact]
+    public void ProtocolEnumValues_MatchNativeDefinitions()
+    {
+        Assert.Equal(3u, DriverProtocol.Version);
+
+        Assert.Equal(1u, (uint)DriverClientRole.Command);
+        Assert.Equal(2u, (uint)DriverClientRole.Event);
+
+        Assert.Equal(0u, (uint)DriverCommandType.Ping);
+        Assert.Equal(1u, (uint)DriverCommandType.ResetRoots);
+        Assert.Equal(2u, (uint)DriverCommandType.AddRoot);
+        Assert.Equal(3u, (uint)DriverCommandType.RemoveRoot);
+        Assert.Equal(4u, (uint)DriverCommandType.Grant);
+        Assert.Equal(5u, (uint)DriverCommandType.Revoke);
+
+        Assert.Equal(1u, (uint)DriverEventType.DeleteDenied);
+        Assert.Equal(1u, (uint)DriverDeleteOperation.Disposition);
+        Assert.Equal(2u, (uint)DriverDeleteOperation.DeleteOnClose);
+        Assert.Equal(3u, (uint)DriverDeleteOperation.NamespaceMutation);
+    }
+
+    [Fact]
     public void CommandCreate_RejectsOversizedPath()
     {
         var path = new string('x', DriverProtocol.MaxPathChars);
