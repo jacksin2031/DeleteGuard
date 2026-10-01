@@ -83,15 +83,18 @@ Release gate remaining: execute the harness in an actual disposable Windows 11 V
 - Intercept `FileRenameInformation` / `FileRenameInformationEx`.
 - Deny protected-source move-out beyond all protected roots.
 - Deny rename-with-replace targeting a protected destination.
-- Allow ordinary rename/move operations that remain within protected roots.
+- Deny renaming an ancestor directory that contains a configured protected root, preventing the policy path from becoming stale while protected data moves with its parent.
+- Allow ordinary rename/move operations that remain within protected roots and do not rename a protected-root ancestor.
 - Keep delete grants delete-only; rename events are non-approvable.
-- Runtime harness uses protected/unprotected sibling directories under the fixed safe VM test root to validate both rename-denial classes and their Relay events.
+- Preserve normalized rename name-information through synchronized post-op and call `FltGetTunneledName` before release.
+- Main runtime harness validates move-out and protected-destination replacement beneath the fixed safe VM root.
+- `run-protected-ancestor-rename-validation.ps1` independently validates the protected-ancestor bypass and operation `RenameProtectedAncestor = 5`.
 
 Remaining review items after v0.2.5:
 
-- execute the loaded-driver rename suite under Driver Verifier;
+- execute all loaded-driver rename suites under Driver Verifier;
+- retain allowed-rename/name-tunneling runtime evidence;
 - hard-link / alternate-namespace threat model;
-- normalized-name / NTFS tunneling runtime review;
 - recovery/uninstall and service/driver tamper-hardening.
 
 ## v0.3 volume protection
