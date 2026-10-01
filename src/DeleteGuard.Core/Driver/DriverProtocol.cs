@@ -29,7 +29,8 @@ public enum DriverDeleteOperation : uint
     Disposition = 1,
     DeleteOnClose = 2,
     MoveOut = 3,
-    ReplaceProtectedDestination = 4
+    ReplaceProtectedDestination = 4,
+    RenameProtectedAncestor = 5
 }
 
 public static class DriverProtocol
