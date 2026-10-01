@@ -15,16 +15,23 @@ $os = Get-CimInstance Win32_OperatingSystem
 Add-Check 'Windows 11/10 x64' ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64' -and $os.Version -like '10.*') "$($os.Caption) $($os.Version)"
 
 $repo = Get-DeleteGuardRepoRoot
-Add-Check '.NET SDK' ([bool](Get-Command dotnet.exe -ErrorAction SilentlyContinue)) ((& dotnet.exe --version 2>$null) | Out-String).Trim()
-Add-Check 'NuGet' ([bool](Get-Command nuget.exe -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $repo 'packages'))) 'NuGet command or restored package directory'
+$dotnet = Get-Command dotnet.exe -ErrorAction SilentlyContinue
+$dotnetDetail = if ($dotnet) { ((& $dotnet.Source --version 2>$null) | Out-String).Trim() } else { 'dotnet.exe not found' }
+Add-Check '.NET SDK' ([bool]$dotnet) $dotnetDetail
+
+$nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
+$hasRestoredPackages = Test-Path (Join-Path $repo 'packages')
+Add-Check 'NuGet/restored packages' ([bool]$nuget -or $hasRestoredPackages) "nuget=$([bool]$nuget); packages=$hasRestoredPackages"
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $hasVs = Test-Path -LiteralPath $vswhere
 Add-Check 'Visual Studio 2022 tooling' $hasVs $vswhere
 
 $testSigningOutput = (& bcdedit.exe /enum '{current}' 2>&1 | Out-String)
-$testSigningEnabled = $testSigningOutput -match '(?im)testsigning\s+Yes'
-Add-Check 'TESTSIGNING enabled' $testSigningEnabled (($testSigningOutput -split "`r?`n" | Where-Object { $_ -match 'testsigning' }) -join '; ')
+$testSigningLines = @($testSigningOutput -split "`r?`n" | Where-Object { $_ -match '(?i)testsigning' })
+# BCDEdit's value text can be localized. Presence is informational here; the
+# hard gate is the subsequent signed-driver load in install-test-stack.ps1.
+Add-Check 'TESTSIGNING configuration visible' ($testSigningLines.Count -gt 0) (($testSigningLines -join '; ').Trim())
 
 $secureBoot = $null
 try { $secureBoot = Confirm-SecureBootUEFI } catch { }
@@ -42,4 +49,5 @@ if (-not $passed) {
     throw 'One or more disposable-VM prerequisites are not ready. Resolve failed checks before installing the driver.'
 }
 
-Write-Host 'DeleteGuard disposable-VM prerequisites are ready.'
+Write-Host 'DeleteGuard disposable-VM prerequisites are ready for the next stage.'
+Write-Host 'The definitive TESTSIGNING check is whether the locally test-signed DeleteGuardFilter can be loaded successfully.'
