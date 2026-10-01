@@ -4,6 +4,7 @@
 #define DG_MAX_COMMAND_CLIENTS 4
 #define DG_CONNECTION_COOKIE_COMMAND_BASE 1u
 #define DG_CONNECTION_COOKIE_EVENT 0x100u
+#define DG_RENAME_BUFFER_TAG 'nRgD'
 
 PFLT_FILTER gFilterHandle = NULL;
 PFLT_PORT gServerPort = NULL;
@@ -46,14 +47,24 @@ static NTSTATUS DgPortMessage(
     _Out_ PULONG ReturnOutputBufferLength);
 
 static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data);
+static BOOLEAN DgSetInfoRequestsRename(_In_ PFLT_CALLBACK_DATA Data);
 static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
     _Inout_ PFLT_CALLBACK_DATA Data,
     _In_ DG_DELETE_OPERATION Operation);
+static FLT_PREOP_CALLBACK_STATUS DgEnforceRename(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static VOID DgPublishDeniedEvent(
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG ProcessId,
+    _In_ DG_EVENT_TYPE EventType,
     _In_ DG_DELETE_OPERATION Operation);
-static BOOLEAN DgPathIsSameOrDescendant(_In_ PCUNICODE_STRING Candidate, _In_reads_(RootChars) const WCHAR *Root, _In_ USHORT RootChars);
+static BOOLEAN DgPathIsSameOrDescendant(
+    _In_ PCUNICODE_STRING Candidate,
+    _In_reads_(RootChars) const WCHAR *Root,
+    _In_ USHORT RootChars);
+static BOOLEAN DgIsProtectedPath(_In_ PCUNICODE_STRING Name);
+static BOOLEAN DgHasProtectedRoots(VOID);
 static BOOLEAN DgIsProtectedAndGranted(
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG ProcessId,
@@ -228,14 +239,17 @@ static FLT_PREOP_CALLBACK_STATUS DgPreSetInformation(
     _In_ PCFLT_RELATED_OBJECTS FltObjects,
     _Flt_CompletionContext_Outptr_ PVOID *CompletionContext)
 {
-    UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(CompletionContext);
 
-    if (!DgSetInfoRequestsDelete(Data)) {
-        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    if (DgSetInfoRequestsDelete(Data)) {
+        return DgEnforceDelete(Data, DgDeleteOperationDisposition);
     }
 
-    return DgEnforceDelete(Data, DgDeleteOperationDisposition);
+    if (DgSetInfoRequestsRename(Data)) {
+        return DgEnforceRename(Data, FltObjects);
+    }
+
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
 static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data)
@@ -257,6 +271,12 @@ static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data)
     }
 
     return FALSE;
+}
+
+static BOOLEAN DgSetInfoRequestsRename(_In_ PFLT_CALLBACK_DATA Data)
+{
+    FILE_INFORMATION_CLASS infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    return infoClass == FileRenameInformation || infoClass == FileRenameInformationEx;
 }
 
 static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
@@ -303,7 +323,7 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    DgPublishDeniedEvent(&nameInfo->Name, processId, Operation);
+    DgPublishDeniedEvent(&nameInfo->Name, processId, DgEventDeleteDenied, Operation);
     FltReleaseFileNameInformation(nameInfo);
 
     Data->IoStatus.Status = STATUS_ACCESS_DENIED;
@@ -311,9 +331,163 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
     return FLT_PREOP_COMPLETE;
 }
 
+static FLT_PREOP_CALLBACK_STATUS DgEnforceRename(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects)
+{
+    FILE_INFORMATION_CLASS infoClass;
+    PFILE_RENAME_INFORMATION renameInfo;
+    PFLT_FILE_NAME_INFORMATION sourceInfo = NULL;
+    PFLT_FILE_NAME_INFORMATION destinationInfo = NULL;
+    PWSTR destinationName = NULL;
+    HANDLE rootDirectory = NULL;
+    ULONG destinationNameLength = 0;
+    ULONG inputLength;
+    ULONG minimumLength;
+    ULONG processId;
+    BOOLEAN sourceProtected;
+    BOOLEAN destinationProtected;
+    BOOLEAN replaceIfExists = FALSE;
+    NTSTATUS status;
+
+    if (FltObjects == NULL || FltObjects->Instance == NULL || Data->Iopb->TargetFileObject == NULL) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    renameInfo = (PFILE_RENAME_INFORMATION)Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
+    inputLength = Data->Iopb->Parameters.SetFileInformation.Length;
+    minimumLength = FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName);
+
+    if (renameInfo == NULL || inputLength < minimumLength) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    __try {
+        rootDirectory = renameInfo->RootDirectory;
+        destinationNameLength = renameInfo->FileNameLength;
+        replaceIfExists = infoClass == FileRenameInformation
+            ? (renameInfo->ReplaceIfExists ? TRUE : FALSE)
+            : (FlagOn(renameInfo->Flags, FILE_RENAME_REPLACE_IF_EXISTS) ? TRUE : FALSE);
+
+        if (destinationNameLength == 0 ||
+            (destinationNameLength % sizeof(WCHAR)) != 0 ||
+            destinationNameLength > inputLength - minimumLength) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+
+        destinationName = (PWSTR)ExAllocatePool2(
+            POOL_FLAG_NON_PAGED,
+            destinationNameLength,
+            DG_RENAME_BUFFER_TAG);
+        if (destinationName == NULL) {
+            Data->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+            Data->IoStatus.Information = 0;
+            return FLT_PREOP_COMPLETE;
+        }
+
+        RtlCopyMemory(destinationName, renameInfo->FileName, destinationNameLength);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (destinationName != NULL) {
+            ExFreePool(destinationName);
+        }
+        Data->IoStatus.Status = GetExceptionCode();
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
+    processId = FltGetRequestorProcessId(Data);
+
+    status = FltGetFileNameInformation(
+        Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &sourceInfo);
+    if (!NT_SUCCESS(status)) {
+        status = FltGetFileNameInformation(
+            Data,
+            FLT_FILE_NAME_OPENED | FLT_FILE_NAME_QUERY_DEFAULT,
+            &sourceInfo);
+    }
+
+    if (!NT_SUCCESS(status) || sourceInfo == NULL) {
+        ExFreePool(destinationName);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    sourceProtected = DgIsProtectedPath(&sourceInfo->Name);
+    if (!sourceProtected && !replaceIfExists) {
+        FltReleaseFileNameInformation(sourceInfo);
+        ExFreePool(destinationName);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    status = FltGetDestinationFileNameInformation(
+        FltObjects->Instance,
+        Data->Iopb->TargetFileObject,
+        rootDirectory,
+        destinationName,
+        destinationNameLength,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &destinationInfo);
+
+    ExFreePool(destinationName);
+    destinationName = NULL;
+
+    if (!NT_SUCCESS(status) || destinationInfo == NULL) {
+        if (sourceProtected || (replaceIfExists && DgHasProtectedRoots())) {
+            DgPublishDeniedEvent(
+                &sourceInfo->Name,
+                processId,
+                DgEventRenameDenied,
+                sourceProtected ? DgDeleteOperationMoveOut : DgDeleteOperationReplaceProtectedDestination);
+            FltReleaseFileNameInformation(sourceInfo);
+            Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+            Data->IoStatus.Information = 0;
+            return FLT_PREOP_COMPLETE;
+        }
+
+        FltReleaseFileNameInformation(sourceInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    destinationProtected = DgIsProtectedPath(&destinationInfo->Name);
+
+    if (replaceIfExists && destinationProtected) {
+        DgPublishDeniedEvent(
+            &destinationInfo->Name,
+            processId,
+            DgEventRenameDenied,
+            DgDeleteOperationReplaceProtectedDestination);
+        FltReleaseFileNameInformation(destinationInfo);
+        FltReleaseFileNameInformation(sourceInfo);
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
+    if (sourceProtected && !destinationProtected) {
+        DgPublishDeniedEvent(
+            &sourceInfo->Name,
+            processId,
+            DgEventRenameDenied,
+            DgDeleteOperationMoveOut);
+        FltReleaseFileNameInformation(destinationInfo);
+        FltReleaseFileNameInformation(sourceInfo);
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
+    FltReleaseFileNameInformation(destinationInfo);
+    FltReleaseFileNameInformation(sourceInfo);
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
 static VOID DgPublishDeniedEvent(
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG ProcessId,
+    _In_ DG_EVENT_TYPE EventType,
     _In_ DG_DELETE_OPERATION Operation)
 {
     DG_EVENT event = { 0 };
@@ -334,7 +508,7 @@ static VOID DgPublishDeniedEvent(
     }
 
     event.Version = DG_PROTOCOL_VERSION;
-    event.Type = DgEventDeleteDenied;
+    event.Type = EventType;
     event.ProcessId = ProcessId;
     event.Operation = Operation;
     event.Sequence = (ULONGLONG)InterlockedIncrement64(&gEventSequence);
@@ -378,6 +552,39 @@ static BOOLEAN DgPathIsSameOrDescendant(
     }
 
     return candidateChars > RootChars && Candidate->Buffer[RootChars] == L'\\';
+}
+
+static BOOLEAN DgIsProtectedPath(_In_ PCUNICODE_STRING Name)
+{
+    ULONG index;
+    BOOLEAN isProtected = FALSE;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&gStateLock);
+
+    for (index = 0; index < DG_MAX_ROOTS; ++index) {
+        if (gRoots[index].Length != 0 &&
+            DgPathIsSameOrDescendant(Name, gRoots[index].Path, gRoots[index].Length)) {
+            isProtected = TRUE;
+            break;
+        }
+    }
+
+    ExReleasePushLockShared(&gStateLock);
+    KeLeaveCriticalRegion();
+    return isProtected;
+}
+
+static BOOLEAN DgHasProtectedRoots(VOID)
+{
+    BOOLEAN hasRoots;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&gStateLock);
+    hasRoots = DgRootCountLocked() != 0;
+    ExReleasePushLockShared(&gStateLock);
+    KeLeaveCriticalRegion();
+    return hasRoots;
 }
 
 static BOOLEAN DgIsProtectedAndGranted(
