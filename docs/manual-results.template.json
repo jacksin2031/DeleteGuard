@@ -16,7 +16,7 @@
     { "id": "concurrent-deletion-race", "status": "NOT_RUN", "observedUtc": "", "expected": "Unauthorized files survive during approved deletion/reconnection", "observed": "", "evidence": [] },
     { "id": "multi-user-rdp", "status": "NOT_RUN", "observedUtc": "", "expected": "Recipient/identity confirmed; no filesystem stalls", "observed": "", "evidence": [] },
     { "id": "shutdown-reboot", "status": "NOT_RUN", "observedUtc": "", "expected": "No shutdown hang; post-boot policies and Relay recover", "observed": "", "evidence": [] },
-    { "id": "disposition-ex", "status": "NOT_RUN", "observedUtc": "", "expected": "Direct FileDispositionInformationEx probe gated by grant", "observed": "", "evidence": [] },
+    { "id": "disposition-ex", "status": "NOT_RUN", "observedUtc": "", "expected": "Automated run records kernel-only denial for flags 1/3/17; manual VM gate covers grant/allowed-path behavior", "observed": "", "evidence": [] },
     { "id": "verifier-stress", "status": "NOT_RUN", "observedUtc": "", "expected": "Recorded stress with Verifier; no unauthorized deletion or crash", "observed": "", "evidence": [] }
   ]
 }

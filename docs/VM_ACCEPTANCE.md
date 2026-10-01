@@ -40,7 +40,8 @@ The source repository uses the same relative layout.
 The safe helper regression suite can run after packaging without elevation or a loaded driver:
 `pwsh -NoProfile -File .\scripts\vm-tests\Test-HarnessHelpers.ps1`.
 It uses generated unprotected scratch files under `artifacts\harness-helper-fixtures` and tests ownership inventory,
-content snapshots, native API controls and refusal to clean up a pre-existing unowned GUID subtree.
+content snapshots, native API controls, `FileDispositionInformationEx` flags 1/3/17 (including a readonly target),
+readonly and missing-path baselines, and refusal to clean up a pre-existing unowned GUID subtree.
 These are tool tests, not protected-delete runtime acceptance.
 
 Read-only preflight (an output directory explicitly requests an evidence file):
@@ -104,7 +105,7 @@ Do not copy a previous release's PASS onto a new driver hash.
 | Concurrent deletes / Broker race | Independent processes delete different fixtures during approved deletion and Relay reconnection; unauthorized files remain intact; operations finish within the recorded deadline. |
 | Multiple users / RDP | Verify the observed prompt recipient(s), approval identity, cancellation, disconnected sessions and lack of I/O stalls. Record whether duplicate prompts occur. |
 | Reboot / shutdown | Relay blocked in receive does not hang shutdown; post-boot loaded-driver/policy/notification state observed. |
-| FileDispositionInformationEx | A direct native probe exercises the extended disposition operation with and without a grant; ordinary DeleteFile alone does not establish this case. |
+| FileDispositionInformationEx | Automated Run first proves unprotected success for DELETE (1), DELETE|POSIX (3), and DELETE|IGNORE_READONLY (17) controls, then requires a successful open, an attempted SetFileInformationByHandle(class 21) denied with error 5, successful close, unchanged fixture hash, restored guard ACL and released mutex for each kernel-only denial. Flags 17 uses a verified readonly fixture. Manual grant/allowed-path behavior remains NOT_RUN until tested in the VM. See Microsoft's [FILE_DISPOSITION_INFORMATION_EX](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_file_disposition_information_ex) and [SetFileInformationByHandle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle) documentation. |
 | Driver Verifier / sustained stress | Exact driver enabled under Verifier; actual stress count/duration/process count recorded; no bugcheck, deadlock or unauthorized deletion. Preserve any dump instead of converting a crash to a pass. |
 
 Use [Driver Verifier](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/driver-verifier)

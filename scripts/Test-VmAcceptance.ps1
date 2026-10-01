@@ -152,14 +152,7 @@ function Add-Case([string]$Id, [string]$Status, [string]$Expected, [string]$Obse
     })
 }
 
-function Add-TypeAssembly {
-    if (-not ('DeleteGuard.Core.Security.AclProtector' -as [type])) {
-        Add-Type -Path $script:CorePath
-    }
-    $loadedCore = ('DeleteGuard.Core.Security.AclProtector' -as [type]).Assembly.Location
-    if (-not (Normalize-Path $loadedCore).Equals((Normalize-Path $script:CorePath), [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'A different DeleteGuard.Core assembly is already loaded. Start a fresh pwsh -File process with the requested package.'
-    }
+function Add-NativeType {
     if (-not ('DeleteGuard.VmAcceptance.Native' -as [type])) {
         $nativeSource = @'
 using System;
@@ -167,10 +160,39 @@ using System.Runtime.InteropServices;
 namespace DeleteGuard.VmAcceptance {
     public static class Native {
         private const uint DeleteAccess = 0x00010000;
+        private const uint WriteAttributesAccess = 0x00000100;
         private const uint ShareAll = 0x00000007;
         private const uint OpenExisting = 3;
+        private const uint FileAttributeNormal = 0x00000080;
         private const uint DeleteOnClose = 0x04000000;
+        private const int FileDispositionInfoEx = 21;
         private static readonly IntPtr InvalidHandle = new IntPtr(-1);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileDispositionInformationEx {
+            public uint Flags;
+        }
+
+        public sealed class DispositionExResult {
+            public uint Flags;
+            public int InformationClass;
+            public bool OpenAttempted;
+            public bool OpenSucceeded;
+            public int? OpenError;
+            public string OpenException;
+            public int OpenHResult;
+            public bool SetAttempted;
+            public bool SetReturned;
+            public bool SetSucceeded;
+            public int? SetError;
+            public string SetException;
+            public int SetHResult;
+            public bool CloseAttempted;
+            public bool CloseSucceeded;
+            public int? CloseError;
+            public string CloseException;
+            public int CloseHResult;
+        }
 
         [DllImport("kernel32.dll", EntryPoint="DeleteFileW", CharSet=CharSet.Unicode, SetLastError=true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -193,26 +215,92 @@ namespace DeleteGuard.VmAcceptance {
         }
 
         [DllImport("kernel32.dll", EntryPoint="CreateFileW", CharSet=CharSet.Unicode, SetLastError=true)]
-        private static extern IntPtr CreateFile(string path, uint access, uint share, IntPtr security,
+        private static extern IntPtr CreateFileNative(string path, uint access, uint share, IntPtr security,
             uint creation, uint flags, IntPtr template);
+
+        [DllImport("kernel32.dll", EntryPoint="SetFileInformationByHandle", SetLastError=true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetFileInformationByHandle(IntPtr handle, int informationClass,
+            ref FileDispositionInformationEx information, uint bufferSize);
 
         [DllImport("kernel32.dll", SetLastError=true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool CloseHandle(IntPtr handle);
 
         public static bool OpenDeleteOnClose(string path, out int error) {
-            IntPtr handle = CreateFile(path, DeleteAccess, ShareAll, IntPtr.Zero,
+            IntPtr handle = CreateFileNative(path, DeleteAccess, ShareAll, IntPtr.Zero,
                 OpenExisting, DeleteOnClose, IntPtr.Zero);
             if (handle == InvalidHandle) { error = Marshal.GetLastWin32Error(); return false; }
             CloseHandle(handle);
             error = 0;
             return true;
         }
+
+        public static DispositionExResult SetDispositionInfoEx(string path, uint flags) {
+            DispositionExResult result = new DispositionExResult();
+            result.Flags = flags;
+            result.InformationClass = FileDispositionInfoEx;
+            result.OpenAttempted = true;
+            IntPtr handle;
+            try {
+                uint access = DeleteAccess | ((flags & 0x10) != 0 ? WriteAttributesAccess : 0);
+                handle = CreateFileNative(path, access, ShareAll, IntPtr.Zero,
+                    OpenExisting, FileAttributeNormal, IntPtr.Zero);
+            }
+            catch (Exception ex) {
+                result.OpenException = ex.GetType().FullName + ": " + ex.Message;
+                result.OpenHResult = ex.HResult;
+                return result;
+            }
+            if (handle == InvalidHandle) {
+                result.OpenError = Marshal.GetLastWin32Error();
+                return result;
+            }
+            result.OpenSucceeded = true;
+            try {
+                FileDispositionInformationEx information = new FileDispositionInformationEx();
+                information.Flags = flags;
+                result.SetAttempted = true;
+                bool setResult = SetFileInformationByHandle(handle, FileDispositionInfoEx,
+                    ref information, (uint)Marshal.SizeOf(typeof(FileDispositionInformationEx)));
+                result.SetReturned = true;
+                result.SetSucceeded = setResult;
+                result.SetError = setResult ? (int?)null : Marshal.GetLastWin32Error();
+            }
+            catch (Exception ex) {
+                result.SetException = ex.GetType().FullName + ": " + ex.Message;
+                result.SetHResult = ex.HResult;
+            }
+            finally {
+                result.CloseAttempted = true;
+                try {
+                    bool closeResult = CloseHandle(handle);
+                    result.CloseSucceeded = closeResult;
+                    result.CloseError = closeResult ? (int?)null : Marshal.GetLastWin32Error();
+                }
+                catch (Exception ex) {
+                    result.CloseException = ex.GetType().FullName + ": " + ex.Message;
+                    result.CloseHResult = ex.HResult;
+                }
+            }
+            return result;
+        }
     }
 }
 '@
         Add-Type -TypeDefinition $nativeSource -Language CSharp
     }
+}
+
+function Add-TypeAssembly {
+    if (-not ('DeleteGuard.Core.Security.AclProtector' -as [type])) {
+        Add-Type -Path $script:CorePath
+    }
+    $loadedCore = ('DeleteGuard.Core.Security.AclProtector' -as [type]).Assembly.Location
+    if (-not (Normalize-Path $loadedCore).Equals((Normalize-Path $script:CorePath), [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'A different DeleteGuard.Core assembly is already loaded. Start a fresh pwsh -File process with the requested package.'
+    }
+    Add-NativeType
 }
 
 function Get-NativeErrorCode([Exception]$Exception) {
@@ -555,6 +643,62 @@ function Invoke-PythonDelete([string]$Path, [string]$PythonPath, [string]$Script
     return @{ denied = $denied; exitCode = $result.exitCode; nativeError = $(if ($null -ne $json) { $json.winerror } else { $null }); detail = "timedOut=$($result.timedOut); stdout=$text; stderr=$($result.stderr.Trim())" }
 }
 
+function Invoke-UnprotectedDispositionControls([string]$ControlRoot) {
+    Ensure-TestDirectory $ControlRoot
+    $allPassed = $true
+    foreach ($case in @(
+        [pscustomobject]@{ suffix = 'delete'; flags = [uint32]1; readOnly = $false },
+        [pscustomobject]@{ suffix = 'posix'; flags = [uint32]3; readOnly = $false },
+        [pscustomobject]@{ suffix = 'ignore-readonly'; flags = [uint32]17; readOnly = $true }
+    )) {
+        $id = "unprotected-disposition-ex-$($case.suffix)"
+        $path = Join-Path $ControlRoot ("disposition-ex-{0}.txt" -f $case.suffix)
+        New-TestFile $path
+        if ($case.readOnly) {
+            [IO.File]::SetAttributes($path, [IO.File]::GetAttributes($path) -bor [IO.FileAttributes]::ReadOnly)
+        }
+        $readOnlyBefore = (([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReadOnly) -ne 0)
+        $native = [DeleteGuard.VmAcceptance.Native]::SetDispositionInfoEx($path, $case.flags)
+        $targetExists = [IO.File]::Exists($path)
+        $readOnlyAfter = if ($targetExists) { (([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReadOnly) -ne 0) } else { $false }
+        $passed = $native.OpenAttempted -and $native.OpenSucceeded -and $native.SetAttempted -and
+            $native.SetReturned -and $native.SetSucceeded -and $native.CloseAttempted -and
+            $native.CloseSucceeded -and -not $targetExists -and (-not $case.readOnly -or $readOnlyBefore)
+        $unsupported = ($native.OpenError -in @(1, 50, 87)) -or ($native.SetError -in @(1, 50, 87)) -or
+            -not [string]::IsNullOrEmpty($native.OpenException) -or -not [string]::IsNullOrEmpty($native.SetException) -or
+            -not [string]::IsNullOrEmpty($native.CloseException)
+        $status = if ($passed) { 'PASS' } elseif ($unsupported) { 'BLOCKED' } else { 'FAIL' }
+        if (-not $passed) { $allPassed = $false }
+        $evidence = @([ordered]@{
+            informationClass = $native.InformationClass
+            flags = $native.Flags
+            openAttempted = $native.OpenAttempted
+            openSucceeded = $native.OpenSucceeded
+            openError = $native.OpenError
+            openException = $native.OpenException
+            openHResult = $native.OpenHResult
+            setAttempted = $native.SetAttempted
+            setReturned = $native.SetReturned
+            setSucceeded = $native.SetSucceeded
+            setError = $native.SetError
+            setException = $native.SetException
+            setHResult = $native.SetHResult
+            closeAttempted = $native.CloseAttempted
+            closeSucceeded = $native.CloseSucceeded
+            closeError = $native.CloseError
+            closeException = $native.CloseException
+            closeHResult = $native.CloseHResult
+            readOnlyBefore = $readOnlyBefore
+            readOnlyAfter = $readOnlyAfter
+            targetExists = $targetExists
+        })
+        Add-Case $id $status "Unprotected FileDispositionInformationEx flags=$($case.flags) opens, sets successfully, closes, and removes its scratch target; flags 17 uses a verified readonly file." `
+            "open=$($native.OpenSucceeded)/$($native.OpenError); setAttempted=$($native.SetAttempted); setReturned=$($native.SetReturned); set=$($native.SetSucceeded)/$($native.SetError); close=$($native.CloseSucceeded)/$($native.CloseError); readonly=$readOnlyBefore/$readOnlyAfter; targetExists=$targetExists" `
+            $path $null $(if ($null -ne $native.SetError) { $native.SetError } else { $native.OpenError }) $evidence
+    }
+    return $allPassed
+}
+
 function Invoke-ProtectFixture {
     $result = Invoke-BoundedProcess $script:BrokerPath @('protect', $script:GuardRoot) 45
     $script:Protected = [DeleteGuard.Core.Security.AclProtector]::HasGuardRule($script:GuardRoot)
@@ -592,7 +736,10 @@ function Invoke-BrokerDelete([string]$Id, [string]$Target, [bool]$Directory, [st
         $passed $Target $result.exitCode $null
 }
 
-function Invoke-KernelOnlyProbe([string]$Target) {
+function Invoke-KernelOnlyProbe([string]$Target,
+    [ValidateSet('DeleteFile', 'DispositionEx')][string]$Operation = 'DeleteFile',
+    [uint32]$Flags = 1,
+    [string]$Id = 'kernel-only-win32-delete') {
     $mutex = [Threading.Mutex]::new($false, 'Global\DeleteGuard.Broker.Mutation')
     $acquired = $false
     $mutexReleased = $false
@@ -600,9 +747,30 @@ function Invoke-KernelOnlyProbe([string]$Target) {
     $restored = $false
     $nativeError = $null
     $deleteSucceeded = $null
+    $nativeResult = $null
+    $hashBefore = $null
+    $hashAfter = $null
+    $readOnlyBefore = $false
+    $readOnlyAfter = $false
     $probeBlocked = $false
     $detail = ''
+    $evidence = @()
     try {
+        $tempRoot = [IO.Path]::GetTempPath()
+        $runId = Split-Path -Leaf $script:RunRoot
+        if (-not $script:OwnedPaths.Contains((Normalize-Path $Target)) -or
+            -not (Test-SafeFixtureTree $Target $script:RunRoot $tempRoot $runId)) {
+            $probeBlocked = $true
+            throw 'Probe target is not a verified owned file in the current GUID fixture subtree.'
+        }
+        if (-not [IO.File]::Exists($Target)) { throw 'Probe target file is missing.' }
+        if ($Operation -eq 'DispositionEx' -and $Flags -notin @(1, 3, 17)) { throw "Unexpected FileDispositionInformationEx flags: $Flags" }
+        if ($Operation -eq 'DispositionEx' -and $Flags -eq 17) {
+            $attributes = [IO.File]::GetAttributes($Target)
+            [IO.File]::SetAttributes($Target, $attributes -bor [IO.FileAttributes]::ReadOnly)
+        }
+        $readOnlyBefore = (([IO.File]::GetAttributes($Target) -band [IO.FileAttributes]::ReadOnly) -ne 0)
+        $hashBefore = (Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash
         try { $acquired = $mutex.WaitOne([TimeSpan]::FromSeconds(30)) }
         catch [Threading.AbandonedMutexException] { $acquired = $true }
         if (-not $acquired) { $probeBlocked = $true; throw 'Mutation mutex was not acquired within 30 seconds.' }
@@ -617,8 +785,16 @@ function Invoke-KernelOnlyProbe([string]$Target) {
             $detail = "Residual delete-deny ACL may mask kernel enforcement: $($residualDenies | ConvertTo-Json -Compress)"
         }
         else {
-            $deleteSucceeded = [DeleteGuard.VmAcceptance.Native]::DeleteFile($Target, [ref]$nativeError)
-            $detail = "mutexAcquired=$acquired; aclRemoved=$removed; DeleteFileW=$deleteSucceeded; targetExists=$(Test-Path -LiteralPath $Target)"
+            if ($Operation -eq 'DeleteFile') {
+                $deleteSucceeded = [DeleteGuard.VmAcceptance.Native]::DeleteFile($Target, [ref]$nativeError)
+                $detail = "mutexAcquired=$acquired; aclRemoved=$removed; DeleteFileW=$deleteSucceeded; targetExists=$(Test-Path -LiteralPath $Target)"
+            }
+            else {
+                $nativeResult = [DeleteGuard.VmAcceptance.Native]::SetDispositionInfoEx($Target, $Flags)
+                if (-not $nativeResult.OpenSucceeded) { $nativeError = $nativeResult.OpenError }
+                elseif ($nativeResult.SetAttempted) { $nativeError = $nativeResult.SetError }
+                $detail = "mutexAcquired=$acquired; aclRemoved=$removed; FileDispositionInformationEx=$($nativeResult.InformationClass); flags=$Flags; open=$($nativeResult.OpenSucceeded)/$($nativeResult.OpenError); setAttempted=$($nativeResult.SetAttempted); setReturned=$($nativeResult.SetReturned); setSucceeded=$($nativeResult.SetSucceeded)/$($nativeResult.SetError); close=$($nativeResult.CloseSucceeded)/$($nativeResult.CloseError)"
+            }
         }
     }
     catch { $detail = $_.Exception.ToString() }
@@ -640,10 +816,58 @@ function Invoke-KernelOnlyProbe([string]$Target) {
         $mutex.Dispose()
     }
     $exists = Test-Path -LiteralPath $Target
-    $passed = $acquired -and $removed -and -not $deleteSucceeded -and $nativeError -eq 5 -and $exists -and $restored -and $mutexReleased
-    $status = if ($acquired -and (-not $restored -or -not $mutexReleased)) { 'FAIL' } elseif ($probeBlocked) { 'BLOCKED' } elseif ($passed) { 'PASS' } else { 'FAIL' }
-    Add-Case 'kernel-only-win32-delete' $status 'With only the registered minifilter policy enforcing this fixture, DeleteFileW returns native error 5 and leaves the file; guard ACL is restored.' `
-        "$detail; nativeError=$nativeError; guardRestored=$restored" $Target $null $nativeError
+    if ($exists) {
+        try { $hashAfter = (Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash } catch { $detail += "; post-probe hash error=$($_.Exception.Message)" }
+        try { $readOnlyAfter = (([IO.File]::GetAttributes($Target) -band [IO.FileAttributes]::ReadOnly) -ne 0) } catch { }
+    }
+    $contentsPreserved = $exists -and $null -ne $hashBefore -and $hashBefore -ceq $hashAfter
+    if ($Operation -eq 'DeleteFile') {
+        $passed = $acquired -and $removed -and -not $deleteSucceeded -and $nativeError -eq 5 -and $contentsPreserved -and $restored -and $mutexReleased
+        $expected = 'With only the registered minifilter policy enforcing this fixture, DeleteFileW returns native error 5 and leaves file contents unchanged; guard ACL is restored and mutex released.'
+    }
+    else {
+        $readOnlyExpected = ($Flags -ne 17) -or ($readOnlyBefore -and $readOnlyAfter)
+        $passed = $acquired -and $removed -and $nativeResult.OpenSucceeded -and $nativeResult.SetAttempted -and
+            $nativeResult.SetReturned -and -not $nativeResult.SetSucceeded -and $nativeResult.SetError -eq 5 -and
+            $nativeResult.CloseAttempted -and $nativeResult.CloseSucceeded -and $contentsPreserved -and
+            $readOnlyExpected -and $restored -and $mutexReleased
+        $expected = "FileDispositionInformationEx flags=$Flags opens the owned target, attempts SetFileInformationByHandle(class 21) and receives FALSE/error 5, closes successfully, preserves content, and restores ACL/mutex state."
+        $evidence = @([ordered]@{
+            informationClass = $nativeResult.InformationClass
+            flags = $nativeResult.Flags
+            openAttempted = $nativeResult.OpenAttempted
+            openSucceeded = $nativeResult.OpenSucceeded
+            openError = $nativeResult.OpenError
+            openException = $nativeResult.OpenException
+            openHResult = $nativeResult.OpenHResult
+            setAttempted = $nativeResult.SetAttempted
+            setReturned = $nativeResult.SetReturned
+            setSucceeded = $nativeResult.SetSucceeded
+            setError = $nativeResult.SetError
+            setException = $nativeResult.SetException
+            setHResult = $nativeResult.SetHResult
+            closeAttempted = $nativeResult.CloseAttempted
+            closeSucceeded = $nativeResult.CloseSucceeded
+            closeError = $nativeResult.CloseError
+            closeException = $nativeResult.CloseException
+            closeHResult = $nativeResult.CloseHResult
+            targetExists = $exists
+            hashBefore = $hashBefore
+            hashAfter = $hashAfter
+            readOnlyBefore = $readOnlyBefore
+            readOnlyAfter = $readOnlyAfter
+            aclRestored = $restored
+            mutexReleased = $mutexReleased
+        })
+    }
+    $unsupported = $Operation -eq 'DispositionEx' -and (($nativeResult.SetError -in @(1, 50, 87)) -or ($nativeResult.OpenError -in @(1, 50, 87)) -or
+        -not [string]::IsNullOrEmpty($nativeResult.OpenException) -or -not [string]::IsNullOrEmpty($nativeResult.SetException))
+    $status = if ($acquired -and (-not $restored -or -not $mutexReleased)) { 'FAIL' }
+        elseif ($probeBlocked -or ($Operation -eq 'DispositionEx' -and -not $nativeResult.OpenSucceeded) -or $unsupported) { 'BLOCKED' }
+        elseif ($passed) { 'PASS' } else { 'FAIL' }
+    if ($Operation -eq 'DeleteFile') { $detail += "; contentHashPreserved=$contentsPreserved; nativeError=$nativeError; guardRestored=$restored; mutexReleased=$mutexReleased" }
+    else { $detail += "; contentHashPreserved=$contentsPreserved; targetExists=$exists; guardRestored=$restored; mutexReleased=$mutexReleased" }
+    Add-Case $Id $status $expected $detail $Target $null $nativeError $evidence
 }
 
 function Invoke-RunCleanup([string]$TempRoot, [string]$RunId) {
@@ -856,8 +1080,21 @@ function Invoke-RunSuite([pscustomobject]$Preflight) {
         [IO.File]::Delete($plainFile)
         Assert-Case 'unprotected-delete' 'An ordinary unprotected file can be deleted.' "exists=$(Test-Path -LiteralPath $plainFile)" (-not (Test-Path -LiteralPath $plainFile)) $plainFile
 
+        $postProtectionCases = @('prefix-sibling-delete','deny-dotnet-file-delete','deny-dotnet-directory-delete','deny-powershell-remove-item','deny-cmd-del','deny-cmd-rmdir','deny-python-file-delete','deny-win32-deletefile','deny-win32-removedirectory','deny-file-delete-on-close','kernel-only-win32-delete','kernel-only-disposition-ex-delete','kernel-only-disposition-ex-posix','kernel-only-disposition-ex-ignore-readonly','broker-approved-file-delete','post-approved-file-ordinary-delete-denied','broker-approved-recursive-delete','post-approved-tree-ordinary-delete-denied')
+        $controlRoot = Join-Path $script:RunRoot 'unprotected-disposition-ex-controls'
+        $controlsPassed = Invoke-UnprotectedDispositionControls $controlRoot
+        if (-not $controlsPassed) {
+            $controlStatuses = @($script:Cases.ToArray() | Where-Object { $_.id -like 'unprotected-disposition-ex-*' } | ForEach-Object { $_.status })
+            $gateStatus = if ($controlStatuses -contains 'BLOCKED') { 'BLOCKED' } else { 'FAIL' }
+            Add-Case 'disposition-ex-control-gate' $gateStatus 'All unprotected native controls for flags 1, 3, and 17 must prove each API stage before the corresponding kernel-only denial is eligible to pass.' "Control statuses: $($controlStatuses -join ', '); protected policy was not registered." $controlRoot
+            foreach ($id in $postProtectionCases) {
+                Add-Case $id 'NOT_RUN' 'Unprotected FileDispositionInformationEx controls must pass before mutation probes proceed.' 'Skipped because at least one native control did not prove the expected result.' $script:GuardRoot
+            }
+            return
+        }
+
         if (-not (Invoke-ProtectFixture)) {
-            foreach ($id in @('prefix-sibling-delete','deny-dotnet-file-delete','deny-dotnet-directory-delete','deny-powershell-remove-item','deny-cmd-del','deny-cmd-rmdir','deny-python-file-delete','deny-win32-deletefile','deny-win32-removedirectory','deny-file-delete-on-close','kernel-only-win32-delete','broker-approved-file-delete','post-approved-file-ordinary-delete-denied','broker-approved-recursive-delete','post-approved-tree-ordinary-delete-denied')) {
+            foreach ($id in $postProtectionCases) {
                 Add-Case $id 'NOT_RUN' 'Broker protect must report active kernel enforcement before mutation probes proceed.' 'Skipped because fixture registration or active enforcement failed.' $script:GuardRoot
             }
             return
@@ -928,6 +1165,17 @@ sys.exit(0 if result["deleted"] else 1)
 
         $kernelFile = Join-Path $probes 'kernel-only.txt'; New-TestFile $kernelFile
         Invoke-KernelOnlyProbe $kernelFile
+
+        foreach ($dispositionCase in @(
+            [pscustomobject]@{ suffix = 'delete'; flags = [uint32]1 },
+            [pscustomobject]@{ suffix = 'posix'; flags = [uint32]3 },
+            [pscustomobject]@{ suffix = 'ignore-readonly'; flags = [uint32]17 }
+        )) {
+            $id = "kernel-only-disposition-ex-$($dispositionCase.suffix)"
+            $target = Join-Path $probes ("disposition-ex-{0}.txt" -f $dispositionCase.suffix)
+            New-TestFile $target
+            Invoke-KernelOnlyProbe -Target $target -Operation DispositionEx -Flags $dispositionCase.flags -Id $id
+        }
 
         $approvedFile = Join-Path $script:GuardRoot 'approved-file.txt'; New-TestFile $approvedFile
         Invoke-BrokerDelete 'broker-approved-file-delete' $approvedFile $false $kernelFile
@@ -1044,7 +1292,7 @@ $report = [ordered]@{
     manualCases = @(
         [ordered]@{ id = 'explorer-agent-uac-ordinary-user'; status = 'NOT_RUN'; reason = 'GUI, ordinary-user, and UAC acceptance is a manual VM gate.' },
         [ordered]@{ id = 'grant-pid-path-expiry-revoke'; status = 'NOT_RUN'; reason = 'Cross-process PID/path/expiry grant matrix is reserved for the manual release gate.' },
-        [ordered]@{ id = 'disposition-ex'; status = 'NOT_RUN'; reason = 'FileDispositionInformationEx is outside this bounded harness.' },
+        [ordered]@{ id = 'disposition-ex'; status = 'NOT_RUN'; reason = 'Kernel-only denial for flags 1, 3, and 17 is automated; grant/allowed-path behavior remains a manual VM gate.' },
         [ordered]@{ id = 'relay-driver-restart-stress-verifier'; status = 'NOT_RUN'; reason = 'Restart, burst, stress, and Driver Verifier are not automated.' }
     )
 }
