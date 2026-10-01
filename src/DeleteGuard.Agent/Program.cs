@@ -31,9 +31,13 @@ internal sealed class ApprovalContext : ApplicationContext
 {
     private readonly DeniedDeleteEventStore _store = new();
     private readonly HashSet<Guid> _known = new();
+    private readonly ApprovalPromptLimiter _promptLimiter = new(
+        maxPrompts: 3,
+        window: TimeSpan.FromSeconds(30));
     private readonly NotifyIcon _notifyIcon;
     private readonly System.Windows.Forms.Timer _timer;
     private bool _polling;
+    private DateTimeOffset _lastThrottleNoticeUtc = DateTimeOffset.MinValue;
 
     public ApprovalContext()
     {
@@ -85,6 +89,8 @@ internal sealed class ApprovalContext : ApplicationContext
             var now = DateTimeOffset.UtcNow;
             foreach (var record in _store.ReadLast(100).OrderBy(record => record.ObservedUtc))
             {
+                // Mark an event known before any filtering so a throttled or stale event
+                // can never be replayed later as a fresh approval opportunity.
                 if (!_known.Add(record.EventId))
                 {
                     continue;
@@ -105,6 +111,12 @@ internal sealed class ApprovalContext : ApplicationContext
                     continue;
                 }
 
+                if (!_promptLimiter.TryAcquire(now))
+                {
+                    ShowThrottleNotice(now);
+                    continue;
+                }
+
                 Prompt(record);
             }
 
@@ -122,6 +134,21 @@ internal sealed class ApprovalContext : ApplicationContext
             _polling = false;
             _timer.Start();
         }
+    }
+
+    private void ShowThrottleNotice(DateTimeOffset now)
+    {
+        if (now - _lastThrottleNoticeUtc < TimeSpan.FromSeconds(15))
+        {
+            return;
+        }
+
+        _lastThrottleNoticeUtc = now;
+        _notifyIcon.ShowBalloonTip(
+            6000,
+            "DeleteGuard is limiting approval prompts",
+            "Many protected deletion attempts were blocked. Automatic approval dialogs are temporarily rate-limited. Protected data remains blocked; use 'deleteguard delete <path>' for an explicit administrator-approved deletion.",
+            ToolTipIcon.Warning);
     }
 
     private void Prompt(DeniedDeleteEventRecord record)
