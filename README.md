@@ -137,11 +137,21 @@ Then run this once as the desktop user who should receive approval prompts:
 .\scripts\enable-agent.ps1
 ```
 
-Driver installation is intentionally not automated while the minifilter remains a development driver requiring test/production signing and a production altitude.
+Driver installation is intentionally not automated in the normal installer while the minifilter remains a development driver requiring test/production signing and a production altitude.
 
-## Safe first test
+## Loaded-driver validation
 
-Use a disposable VM/folder, not important data:
+Kernel runtime testing has a separate guarded workflow. **Use only a disposable Windows 11 VM.** Do not test-sign/load the development driver on a normal workstation or on important data.
+
+See [docs/RUNTIME-VALIDATION.md](docs/RUNTIME-VALIDATION.md).
+
+The `scripts/testvm` workflow requires an explicit disposable-VM acknowledgment and machine-bound marker, test-signs the driver locally, enables targeted Driver Verifier, and restricts destructive tests to exactly `C:\DeleteGuard-VMTest` and its descendants.
+
+GitHub CI checks the test-VM scripts for Windows PowerShell 5.1 syntax, but CI does not claim that the driver has been runtime-validated until the suite is executed in an actual disposable VM and its report/verifier evidence is retained.
+
+## Safe ACL-only first test
+
+Without loading the development driver, use a disposable folder, not important data:
 
 ```powershell
 mkdir C:\DeleteGuard-Test
@@ -170,4 +180,4 @@ The denied-event stream rotates at 4 MiB and retains one previous file.
 
 DeleteGuard is designed to prevent accidental or unauthorized destructive file operations on configured paths. It is not a backup and does not protect against raw disk writes, partition deletion, formatting, offline attacks, filesystem corruption or physical device failure.
 
-See [SECURITY.md](SECURITY.md), [docs/MINIFILTER.md](docs/MINIFILTER.md), [docs/INTERACTIVE_APPROVAL.md](docs/INTERACTIVE_APPROVAL.md), and [docs/ROADMAP.md](docs/ROADMAP.md).
+See [SECURITY.md](SECURITY.md), [docs/MINIFILTER.md](docs/MINIFILTER.md), [docs/INTERACTIVE_APPROVAL.md](docs/INTERACTIVE_APPROVAL.md), [docs/RUNTIME-VALIDATION.md](docs/RUNTIME-VALIDATION.md), and [docs/ROADMAP.md](docs/ROADMAP.md).
