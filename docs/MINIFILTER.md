@@ -67,9 +67,11 @@ Rename enforcement intentionally does **not** consume the delete-grant table. Ap
 
 The replace-protected-destination rule is intentionally conservative. Software that performs atomic save/replace by renaming a temporary file over a protected target can receive Access Denied. For critical/archive-style protected roots, that is the expected policy boundary rather than an implicit bypass.
 
-The rename destination buffer is copied before resolution and is converted to a normalized destination name with Filter Manager. If a protected-source destination cannot be resolved safely, DeleteGuard fails closed. The disposable-VM runtime suite validates both move-out denial and protected-destination replacement denial using only sibling directories under `C:\DeleteGuard-VMTest`.
+The rename destination buffer is copied before resolution and is converted to a normalized destination name with Filter Manager. `IRP_MJ_SET_INFORMATION` is a buffered operation, so the filesystem receives the I/O-manager-owned information buffer rather than a mutable raw user pointer. If a protected-source destination cannot be resolved safely, DeleteGuard fails closed.
 
-Normalized rename names can be affected by NTFS file-name tunneling after a successful rename. DeleteGuard does not persist the pre-operation destination as authoritative post-operation identity; v0.2.5 uses it only for the pre-operation protected-root containment decision. Allowed rename/tunneling behavior remains part of the loaded-driver runtime review.
+For allowed rename operations where DeleteGuard queried normalized source and/or destination information, the pre-operation callback returns `FLT_PREOP_SYNCHRONIZE`, retains those name-information references in a small nonpaged completion context, and the post-operation callback calls `FltGetTunneledName` before releasing them. This follows Filter Manager's required lifecycle for normalized rename names that can be affected by NTFS file-name tunneling. The tunneled final component is not persisted as a new authorization decision; destructive containment is still decided before the namespace mutation occurs.
+
+The disposable-VM runtime suite validates both move-out denial and protected-destination replacement denial using only sibling directories under `C:\DeleteGuard-VMTest`. Allowed-rename/tunneling behavior remains part of Driver Verifier/runtime evidence rather than being inferred from build success alone.
 
 ## Protected roots
 
@@ -162,7 +164,7 @@ Before any public/production driver release, DeleteGuard still needs:
 2. a production driver signing / attestation or HLK path as applicable;
 3. recorded loaded-driver VM runs under Driver Verifier with no violations;
 4. stress/race and destructive-rename runtime results retained as release evidence;
-5. hard-link/alternate-namespace and name-resolution/tunneling threat-model review;
+5. hard-link/alternate-namespace and name-resolution/tunneling runtime threat-model review;
 6. service/driver tamper-hardening review and recovery/uninstall validation.
 
 The altitude in `DeleteGuardFilter.inf` is development-only and must not be shipped as a production altitude.
