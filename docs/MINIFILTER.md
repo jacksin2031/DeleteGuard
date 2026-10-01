@@ -1,28 +1,28 @@
 # DeleteGuard minifilter design
 
-DeleteGuard v0.2 adds a Windows file-system minifilter to close the temporary ACL-release race in v0.1. v0.2.1 adds denied-event/interactive approval, v0.2.2 adds guarded disposable-VM validation, v0.2.4 binds delete grants to process start identity, and v0.2.5 gates destructive namespace escape.
+DeleteGuard v0.2 adds a Windows file-system minifilter to close the temporary ACL-release race in v0.1. v0.2.1 adds denied-event/interactive approval, v0.2.2 adds guarded disposable-VM validation, v0.2.4 binds delete grants to process start identity, v0.2.5 gates destructive rename/move namespace escape, and v0.2.6 extends namespace containment to NTFS hard links.
 
 ## Enforcement path
 
 ```text
-Explorer / cmd / PowerShell / Python / Win32 API
-                         |
-                         v
-                  I/O request
-                         |
-                         v
-              DeleteGuardFilter.sys
-               /               \
-     protected + denied       allowed
-             |                    |
-      STATUS_ACCESS_DENIED        v
-             |             normal NTFS processing
-             v
-       best-effort event
-             |
-   LocalSystem Event Relay
-             |
-        desktop Agent
+Explorer / cmd / PowerShell / Python / Win32 / Native API
+                           |
+                           v
+                    I/O request
+                           |
+                           v
+                DeleteGuardFilter.sys
+                 /                 \
+       protected + denied         allowed
+               |                      |
+        STATUS_ACCESS_DENIED          v
+               |               normal NTFS processing
+               v
+         best-effort event
+               |
+     LocalSystem Event Relay
+               |
+          desktop Agent
 ```
 
 Approved delete path:
@@ -48,37 +48,50 @@ The ACL layer remains a fallback. If the driver is unavailable, v0.1 behavior re
 - `IRP_MJ_SET_INFORMATION` + `FileDispositionInformationEx`
 - `IRP_MJ_CREATE` with `FILE_DELETE_ON_CLOSE`
 
-### Namespace mutation
+### Rename / move namespace mutation
 
 - `FileRenameInformation`
 - `FileRenameInformationBypassAccessCheck`
 - `FileRenameInformationEx`
 - `FileRenameInformationExBypassAccessCheck`
 
-For rename/move operations:
+### Hard-link namespace mutation
+
+- `FileLinkInformation`
+- `FileLinkInformationBypassAccessCheck`
+- `FileLinkInformationEx`
+- `FileLinkInformationExBypassAccessCheck`
+
+For namespace operations:
 
 - a protected source may remain inside its existing protecting root;
-- a protected source moving outside that root is denied;
-- rename-with-replace is denied when its destination is protected;
+- a protected source moving, renaming, or hard-linking outside that root is denied;
+- replace-existing rename/link operations are denied when the destination is protected;
 - if a protected-source destination cannot be safely resolved, the operation fails closed;
 - delete grants do not authorize namespace mutation.
 
-This specifically protects unrelated files during the Broker's temporary ACL-relaxation window.
+This specifically protects unrelated files and aliases during the Broker's temporary ACL-relaxation window. Hard-link containment also matters outside that window because hard-link creation is not fundamentally a delete operation and therefore cannot be delegated to the v0.1 DELETE ACL alone.
 
-The filter attaches to NTFS only, matching the ACL support boundary.
+The filter attaches to NTFS only.
 
 ## Safe capture of set-information buffers
 
 `SetFileInformation.InfoBuffer` is treated as untrusted when the request originates in user mode.
 
-For disposition operations, the minifilter probes when required and copies the fixed-size input into a kernel-local structure before checking the delete flag.
+For disposition operations, the minifilter probes when required and copies the fixed-size input into a kernel-local structure before checking delete flags.
 
-Rename operations use a two-stage capture:
+Rename and hard-link operations share a two-stage namespace capture:
 
-1. safely inspect/copy the fixed header fields (`RootDirectory`, flags, filename length);
+1. safely inspect/copy fixed header fields (`RootDirectory`, replace semantics, filename length);
 2. validate the variable filename length, allocate nonpaged kernel memory, then probe/copy the filename into that stable buffer.
 
-Destination resolution uses only the captured kernel copy. Structured exception handling protects the probe/copy boundary. This prevents direct bad-pointer dereferences and prevents user mode from changing rename metadata between validation and use.
+Destination resolution uses only the captured kernel copy. Structured exception handling protects the probe/copy boundary. This avoids direct bad-pointer dereference and prevents user mode from changing namespace metadata between validation and use.
+
+## Destination-name resolution
+
+For rename and hard-link operations, the filter uses `FltGetDestinationFileNameInformation` with the captured root handle/name. Enforcement compares the normalized destination path against the configured protected-root table.
+
+A protected source moving to an unresolved destination is denied rather than allowed. For an unprotected source, a non-replacing operation can proceed without a protected-source containment decision; replace-existing requests are resolved so a protected destination cannot be overwritten.
 
 ## Protected roots
 
@@ -112,11 +125,15 @@ The driver does not retain a long-lived `EPROCESS` reference. It references the 
 
 A delete grant covers the approved target and descendants so one elevated recursive delete can remove a tree. The Broker normally requests 15 seconds and explicitly revokes the grant in `finally`.
 
+Namespace operations never consult delete grants as an authorization to escape or replace protected namespace entries.
+
 ## Namespace-denial UX
 
-Protocol v3 preserves the same fixed managed/native ABI. `DriverDeleteOperation.NamespaceMutation` / `DgDeleteOperationNamespaceMutation` identifies rename/move denial events without changing structure sizes.
+Protocol v3 preserves the same fixed managed/native ABI. `DriverDeleteOperation.NamespaceMutation` / `DgDeleteOperationNamespaceMutation` identifies rename, move, replacement, and hard-link alias denials without changing structure sizes.
 
-The Relay persists these events but marks them non-approvable. The Agent shows a warning only; it never turns a denied rename/move into Yes -> UAC -> Broker delete.
+The Relay persists these events but marks them non-approvable. The Agent shows a warning only; it never turns a denied namespace operation into Yes -> UAC -> Broker delete.
+
+Managed tests lock the protocol version, client-role values, command values, event value, operation values, and structure sizes to catch managed/native ABI drift.
 
 ## Communication security
 
@@ -145,6 +162,7 @@ CI verifies:
 - INF/package generation and Inf2Cat signability;
 - managed protocol/build/tests/package;
 - Windows PowerShell 5.1 parsing of test-VM scripts;
+- Windows PowerShell 5.1 compilation of native test probes such as `HardLinkProbe.cs`;
 - destructive-test path boundary smoke checks.
 
 The CI driver artifact remains **unsigned**.
@@ -153,15 +171,22 @@ The CI driver artifact remains **unsigned**.
 
 Do not load the CI driver on a normal or production machine. Build verification is not a loaded-driver test.
 
-Use the guarded disposable-VM runbook in [RUNTIME-VALIDATION.md](RUNTIME-VALIDATION.md). The harness covers test signing, Filter Manager load/unload, targeted Driver Verifier, multiple delete paths, relay outage, stress, grant races, and namespace move/replace races.
+Use the guarded disposable-VM runbook in [RUNTIME-VALIDATION.md](RUNTIME-VALIDATION.md). The harness covers test signing, Filter Manager load/unload, targeted Driver Verifier, multiple delete paths, relay outage, stress, grant races, rename/move replacement races, and hard-link alias races.
+
+`run-hardlink-validation.ps1` uses a dedicated sentinel-guarded `C:\DeleteGuard-VMTest\HardLinkCase`. It verifies:
+
+- external alias creation from a protected source returns access denied;
+- a same-root hard link remains allowed;
+- native `FileLinkInformationEx + FILE_LINK_REPLACE_IF_EXISTS` cannot replace a protected destination;
+- an unrelated process cannot create an external alias during the Broker ACL-relaxation window.
 
 The interactive Agent/UAC acceptance remains manual because it validates a real desktop session and Windows secure-desktop elevation flow.
 
-## Remaining namespace boundary
+## Remaining validation boundary
 
-NTFS hard-link creation uses `FileLinkInformation` / `FileLinkInformationEx` and can introduce another pathname for an existing file. It is a separate v0.2.6 hardening item. Until it is gated and runtime-validated, DeleteGuard should not claim complete alias containment for all NTFS namespace mechanisms.
+The kernel code now gates deletion, destructive rename/move, and NTFS hard-link alias escape. That is still not equivalent to production-ready namespace containment.
 
-Reparse-point protection roots remain rejected.
+Before release, loaded-driver testing must exercise hostile/malformed buffers, existing hard-link edge cases, normalized-name behavior, reparse interactions, cross-volume failures, and concurrency under Driver Verifier. Reparse-point protection roots remain rejected.
 
 ## Production release blockers
 
@@ -170,9 +195,8 @@ Before any public/production driver release, DeleteGuard still needs:
 1. Microsoft-assigned production minifilter altitude;
 2. production driver signing / attestation or HLK path as applicable;
 3. recorded loaded-driver VM runs under Driver Verifier with no violations;
-4. retained stress/race evidence for delete and namespace gates;
-5. hard-link/alias policy completion or an explicitly documented accepted boundary;
-6. service/driver tamper-hardening review;
-7. recovery and uninstall validation.
+4. retained stress/race evidence for delete, rename/move, and hard-link namespace gates;
+5. service/driver tamper-hardening review;
+6. recovery and uninstall validation.
 
 The altitude in `DeleteGuardFilter.inf` is development-only and must not ship as a production altitude.
