@@ -29,7 +29,8 @@ typedef enum _DG_EVENT_TYPE {
 typedef enum _DG_DELETE_OPERATION {
     DgDeleteOperationDisposition = 1,
     DgDeleteOperationDeleteOnClose = 2,
-    DgDeleteOperationRenameOut = 3
+    DgDeleteOperationRenameOut = 3,
+    DgDeleteOperationRenameReplace = 4
 } DG_DELETE_OPERATION;
 
 typedef struct _DG_CONNECT_CONTEXT {
