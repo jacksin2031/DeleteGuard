@@ -4,7 +4,7 @@
 #define DG_MAX_COMMAND_CLIENTS 4
 #define DG_CONNECTION_COOKIE_COMMAND_BASE 1u
 #define DG_CONNECTION_COOKIE_EVENT 0x100u
-#define DG_RENAME_POOL_TAG 'nRgD'
+#define DG_NAMESPACE_POOL_TAG 'sNgD'
 
 PFLT_FILTER gFilterHandle = NULL;
 PFLT_PORT gServerPort = NULL;
@@ -15,12 +15,12 @@ DG_ROOT_ENTRY gRoots[DG_MAX_ROOTS];
 DG_GRANT_ENTRY gGrants[DG_MAX_GRANTS];
 volatile LONG64 gEventSequence = 0;
 
-typedef struct _DG_RENAME_CAPTURE {
+typedef struct _DG_NAMESPACE_CAPTURE {
     HANDLE RootDirectory;
-    ULONG Flags;
+    BOOLEAN ReplaceIfExists;
     ULONG FileNameLength;
     PWCHAR FileName;
-} DG_RENAME_CAPTURE, *PDG_RENAME_CAPTURE;
+} DG_NAMESPACE_CAPTURE, *PDG_NAMESPACE_CAPTURE;
 
 DRIVER_INITIALIZE DriverEntry;
 
@@ -58,11 +58,11 @@ static BOOLEAN DgCopySetInformationBuffer(
     _Out_writes_bytes_(DestinationLength) PVOID Destination,
     _In_ ULONG DestinationLength);
 static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data);
-static BOOLEAN DgSetInfoRequestsRename(_In_ PFLT_CALLBACK_DATA Data);
-static NTSTATUS DgCaptureRenameRequest(
+static BOOLEAN DgSetInfoRequestsNamespaceMutation(_In_ PFLT_CALLBACK_DATA Data);
+static NTSTATUS DgCaptureNamespaceRequest(
     _In_ PFLT_CALLBACK_DATA Data,
-    _Out_ PDG_RENAME_CAPTURE Capture);
-static VOID DgReleaseRenameCapture(_Inout_ PDG_RENAME_CAPTURE Capture);
+    _Out_ PDG_NAMESPACE_CAPTURE Capture);
+static VOID DgReleaseNamespaceCapture(_Inout_ PDG_NAMESPACE_CAPTURE Capture);
 static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
     _Inout_ PFLT_CALLBACK_DATA Data,
     _In_ DG_DELETE_OPERATION Operation);
@@ -256,7 +256,7 @@ static FLT_PREOP_CALLBACK_STATUS DgPreSetInformation(
 {
     UNREFERENCED_PARAMETER(CompletionContext);
 
-    if (DgSetInfoRequestsRename(Data)) {
+    if (DgSetInfoRequestsNamespaceMutation(Data)) {
         return DgEnforceNamespaceMutation(Data, FltObjects);
     }
 
@@ -321,27 +321,32 @@ static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data)
     return FALSE;
 }
 
-static BOOLEAN DgSetInfoRequestsRename(_In_ PFLT_CALLBACK_DATA Data)
+static BOOLEAN DgSetInfoRequestsNamespaceMutation(_In_ PFLT_CALLBACK_DATA Data)
 {
     FILE_INFORMATION_CLASS infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
 
     return infoClass == FileRenameInformation ||
         infoClass == FileRenameInformationBypassAccessCheck ||
         infoClass == FileRenameInformationEx ||
-        infoClass == FileRenameInformationExBypassAccessCheck;
+        infoClass == FileRenameInformationExBypassAccessCheck ||
+        infoClass == FileLinkInformation ||
+        infoClass == FileLinkInformationBypassAccessCheck ||
+        infoClass == FileLinkInformationEx ||
+        infoClass == FileLinkInformationExBypassAccessCheck;
 }
 
-static NTSTATUS DgCaptureRenameRequest(
+static NTSTATUS DgCaptureNamespaceRequest(
     _In_ PFLT_CALLBACK_DATA Data,
-    _Out_ PDG_RENAME_CAPTURE Capture)
+    _Out_ PDG_NAMESPACE_CAPTURE Capture)
 {
     FILE_INFORMATION_CLASS infoClass;
-    PFILE_RENAME_INFORMATION renameInfo;
+    PVOID infoBuffer;
     ULONG bufferLength;
-    ULONG headerLength = FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName);
+    ULONG headerLength;
     ULONG fileNameLength;
     HANDLE rootDirectory;
-    ULONG flags;
+    BOOLEAN replaceIfExists;
+    PWCHAR sourceFileName;
     PWCHAR fileNameCopy;
 
     if (Data == NULL || Data->Iopb == NULL || Capture == NULL) {
@@ -350,29 +355,69 @@ static NTSTATUS DgCaptureRenameRequest(
 
     RtlZeroMemory(Capture, sizeof(*Capture));
     infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
-    renameInfo = (PFILE_RENAME_INFORMATION)Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
+    infoBuffer = Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
     bufferLength = Data->Iopb->Parameters.SetFileInformation.Length;
 
-    if (renameInfo == NULL || bufferLength < headerLength) {
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-
-    __try {
-        if (Data->RequestorMode == UserMode && !FLT_IS_SYSTEM_BUFFER(Data)) {
-            ProbeForRead(renameInfo, headerLength, sizeof(UCHAR));
+    if (infoClass == FileRenameInformation ||
+        infoClass == FileRenameInformationBypassAccessCheck ||
+        infoClass == FileRenameInformationEx ||
+        infoClass == FileRenameInformationExBypassAccessCheck) {
+        PFILE_RENAME_INFORMATION renameInfo = (PFILE_RENAME_INFORMATION)infoBuffer;
+        headerLength = FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName);
+        if (renameInfo == NULL || bufferLength < headerLength) {
+            return STATUS_BUFFER_TOO_SMALL;
         }
 
-        rootDirectory = renameInfo->RootDirectory;
-        fileNameLength = renameInfo->FileNameLength;
-        if (infoClass == FileRenameInformation || infoClass == FileRenameInformationBypassAccessCheck) {
-            flags = renameInfo->ReplaceIfExists ? FILE_RENAME_REPLACE_IF_EXISTS : 0;
+        __try {
+            if (Data->RequestorMode == UserMode && !FLT_IS_SYSTEM_BUFFER(Data)) {
+                ProbeForRead(renameInfo, headerLength, sizeof(UCHAR));
+            }
+
+            rootDirectory = renameInfo->RootDirectory;
+            fileNameLength = renameInfo->FileNameLength;
+            sourceFileName = renameInfo->FileName;
+            if (infoClass == FileRenameInformation || infoClass == FileRenameInformationBypassAccessCheck) {
+                replaceIfExists = renameInfo->ReplaceIfExists ? TRUE : FALSE;
+            }
+            else {
+                replaceIfExists = FlagOn(renameInfo->Flags, FILE_RENAME_REPLACE_IF_EXISTS) ? TRUE : FALSE;
+            }
         }
-        else {
-            flags = renameInfo->Flags;
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return GetExceptionCode();
         }
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return GetExceptionCode();
+    else if (infoClass == FileLinkInformation ||
+        infoClass == FileLinkInformationBypassAccessCheck ||
+        infoClass == FileLinkInformationEx ||
+        infoClass == FileLinkInformationExBypassAccessCheck) {
+        PFILE_LINK_INFORMATION linkInfo = (PFILE_LINK_INFORMATION)infoBuffer;
+        headerLength = FIELD_OFFSET(FILE_LINK_INFORMATION, FileName);
+        if (linkInfo == NULL || bufferLength < headerLength) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        __try {
+            if (Data->RequestorMode == UserMode && !FLT_IS_SYSTEM_BUFFER(Data)) {
+                ProbeForRead(linkInfo, headerLength, sizeof(UCHAR));
+            }
+
+            rootDirectory = linkInfo->RootDirectory;
+            fileNameLength = linkInfo->FileNameLength;
+            sourceFileName = linkInfo->FileName;
+            if (infoClass == FileLinkInformation || infoClass == FileLinkInformationBypassAccessCheck) {
+                replaceIfExists = linkInfo->ReplaceIfExists ? TRUE : FALSE;
+            }
+            else {
+                replaceIfExists = FlagOn(linkInfo->Flags, FILE_LINK_REPLACE_IF_EXISTS) ? TRUE : FALSE;
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return GetExceptionCode();
+        }
+    }
+    else {
+        return STATUS_INVALID_INFO_CLASS;
     }
 
     if (fileNameLength == 0 ||
@@ -384,33 +429,33 @@ static NTSTATUS DgCaptureRenameRequest(
     fileNameCopy = (PWCHAR)ExAllocatePool2(
         POOL_FLAG_NON_PAGED,
         fileNameLength,
-        DG_RENAME_POOL_TAG);
+        DG_NAMESPACE_POOL_TAG);
     if (fileNameCopy == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     __try {
         if (Data->RequestorMode == UserMode && !FLT_IS_SYSTEM_BUFFER(Data)) {
-            ProbeForRead(renameInfo->FileName, fileNameLength, sizeof(WCHAR));
+            ProbeForRead(sourceFileName, fileNameLength, sizeof(WCHAR));
         }
-        RtlCopyMemory(fileNameCopy, renameInfo->FileName, fileNameLength);
+        RtlCopyMemory(fileNameCopy, sourceFileName, fileNameLength);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        ExFreePoolWithTag(fileNameCopy, DG_RENAME_POOL_TAG);
+        ExFreePoolWithTag(fileNameCopy, DG_NAMESPACE_POOL_TAG);
         return GetExceptionCode();
     }
 
     Capture->RootDirectory = rootDirectory;
-    Capture->Flags = flags;
+    Capture->ReplaceIfExists = replaceIfExists;
     Capture->FileNameLength = fileNameLength;
     Capture->FileName = fileNameCopy;
     return STATUS_SUCCESS;
 }
 
-static VOID DgReleaseRenameCapture(_Inout_ PDG_RENAME_CAPTURE Capture)
+static VOID DgReleaseNamespaceCapture(_Inout_ PDG_NAMESPACE_CAPTURE Capture)
 {
     if (Capture != NULL && Capture->FileName != NULL) {
-        ExFreePoolWithTag(Capture->FileName, DG_RENAME_POOL_TAG);
+        ExFreePoolWithTag(Capture->FileName, DG_NAMESPACE_POOL_TAG);
         Capture->FileName = NULL;
         Capture->FileNameLength = 0;
     }
@@ -475,11 +520,10 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceNamespaceMutation(
     NTSTATUS status;
     PFLT_FILE_NAME_INFORMATION sourceInfo = NULL;
     PFLT_FILE_NAME_INFORMATION destinationInfo = NULL;
-    DG_RENAME_CAPTURE renameCapture = { 0 };
+    DG_NAMESPACE_CAPTURE namespaceCapture = { 0 };
     DG_ROOT_ENTRY sourceRoot = { 0 };
     BOOLEAN sourceProtected;
     BOOLEAN destinationProtected;
-    BOOLEAN replaceIfExists;
     ULONG processId;
 
     processId = FltGetRequestorProcessId(Data);
@@ -502,7 +546,7 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceNamespaceMutation(
 
     sourceProtected = DgGetProtectingRoot(&sourceInfo->Name, &sourceRoot);
 
-    status = DgCaptureRenameRequest(Data, &renameCapture);
+    status = DgCaptureNamespaceRequest(Data, &namespaceCapture);
     if (!NT_SUCCESS(status)) {
         if (sourceProtected) {
             DgPublishDeniedEvent(
@@ -519,9 +563,8 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceNamespaceMutation(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    replaceIfExists = FlagOn(renameCapture.Flags, FILE_RENAME_REPLACE_IF_EXISTS) ? TRUE : FALSE;
-    if (!sourceProtected && !replaceIfExists) {
-        DgReleaseRenameCapture(&renameCapture);
+    if (!sourceProtected && !namespaceCapture.ReplaceIfExists) {
+        DgReleaseNamespaceCapture(&namespaceCapture);
         FltReleaseFileNameInformation(sourceInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -532,14 +575,14 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceNamespaceMutation(
                 &sourceInfo->Name,
                 processId,
                 DgDeleteOperationNamespaceMutation);
-            DgReleaseRenameCapture(&renameCapture);
+            DgReleaseNamespaceCapture(&namespaceCapture);
             FltReleaseFileNameInformation(sourceInfo);
             Data->IoStatus.Status = STATUS_ACCESS_DENIED;
             Data->IoStatus.Information = 0;
             return FLT_PREOP_COMPLETE;
         }
 
-        DgReleaseRenameCapture(&renameCapture);
+        DgReleaseNamespaceCapture(&namespaceCapture);
         FltReleaseFileNameInformation(sourceInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -547,13 +590,13 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceNamespaceMutation(
     status = FltGetDestinationFileNameInformation(
         FltObjects->Instance,
         FltObjects->FileObject,
-        renameCapture.RootDirectory,
-        renameCapture.FileName,
-        renameCapture.FileNameLength,
+        namespaceCapture.RootDirectory,
+        namespaceCapture.FileName,
+        namespaceCapture.FileNameLength,
         FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
         &destinationInfo);
 
-    DgReleaseRenameCapture(&renameCapture);
+    DgReleaseNamespaceCapture(&namespaceCapture);
 
     if (!NT_SUCCESS(status) || destinationInfo == NULL) {
         if (sourceProtected) {
@@ -589,7 +632,7 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceNamespaceMutation(
         return FLT_PREOP_COMPLETE;
     }
 
-    if (replaceIfExists && destinationProtected) {
+    if (namespaceCapture.ReplaceIfExists && destinationProtected) {
         DgPublishDeniedEvent(
             &destinationInfo->Name,
             processId,
