@@ -111,7 +111,7 @@ function Invoke-DeleteGuardBroker {
 
 function Test-DeleteGuardFilterLoaded {
     $output = & fltmc.exe filters 2>&1 | Out-String
-    return $output -match '(?im)^DeleteGuardFilter\s'
+    return $output -match '(?im)^\s*DeleteGuardFilter\s'
 }
 
 function Wait-DeleteGuardFilterLoaded {
