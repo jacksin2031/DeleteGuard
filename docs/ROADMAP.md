@@ -11,31 +11,30 @@
 
 ## v0.2 minifilter kernel gate — build-verified prototype
 
-Implemented in the v0.2 development branch:
+Implemented:
 
 - Intercept delete disposition (`FileDispositionInformation` / `FileDispositionInformationEx`).
 - Intercept `FILE_DELETE_ON_CLOSE`.
-- Broker-to-driver grants scoped to process ID, target path and short TTL.
+- Broker-to-driver grants scoped to process identity, target path and short TTL.
 - Preserve v0.1 ACL as a fallback layer.
 - Close the normal approved-delete ACL-removal race by keeping unrelated processes blocked in the minifilter.
 - Pinned WDK/SDK CI build, Universal ApiValidator, Inf2Cat and unsigned driver artifact.
 
-Still required before v0.2 can be treated as production-ready:
+Still required before production readiness:
 
 - Microsoft-assigned production minifilter altitude.
 - Production driver signing path.
 - Loaded-driver VM evidence under Driver Verifier and stress/race testing.
-- Destructive rename/move-out interception or an explicitly accepted scope boundary.
 - Driver/service health and recovery hardening.
 
 ## v0.2.1 interactive approval UX — build-verified prototype
 
 Implemented:
 
-- Minifilter emits best-effort denied-delete events without waiting on UI.
+- Minifilter emits best-effort denied-operation events without waiting on UI.
 - Privileged Event Relay receives kernel events and persists a bounded protected history.
-- Unelevated desktop Agent shows process/path approval requests.
-- Explicit deny/approve choice; approval launches the existing UAC Broker.
+- Unelevated desktop Agent shows process/path delete-approval requests.
+- Explicit deny/approve choice; delete approval launches the UAC Broker.
 - Protocol v3 separates command and event roles while leaving the Filter Manager port privileged.
 - Broker/Relay synchronization mutex prevents policy reset from racing a live grant.
 - Duplicate-event coalescing and 4 MiB history rotation.
@@ -44,7 +43,6 @@ Implemented:
 Still required:
 
 - Loaded-driver desktop-session validation of Explorer/Agent/UAC behavior.
-- Process identity hardening beyond PID/name for future hostile-local-process threat models.
 - UX polish, localization and richer operation/process presentation.
 
 ## v0.2.2 runtime validation gate — harness implemented
@@ -63,7 +61,38 @@ Implemented in `scripts/testvm` and `docs/RUNTIME-VALIDATION.md`:
 - machine-readable runtime acceptance report;
 - guarded cleanup.
 
-Release gate remaining: execute the harness in an actual disposable Windows 11 VM, retain the report/dumps/verifier evidence, and resolve any runtime findings before making PR #3 ready for review.
+Release gate remaining: execute the harness in an actual disposable Windows 11 VM, retain the report/dumps/verifier evidence, and resolve runtime findings before promoting the kernel stack.
+
+## v0.2.3 approval-flood hardening — build-verified
+
+- Bounded Relay recent-event state.
+- Duplicate suppression with hard cap under unique-path floods.
+- Automatic approval prompts limited to a rolling budget.
+- Throttled warning notifications.
+- Suppressed/stale events never replay later as fresh approvals.
+
+## v0.2.4 process-identity grants — build-verified
+
+- Kernel grant identity is PID + `PsGetProcessStartKey`, not PID alone.
+- Request matching uses the actual Filter Manager I/O requestor process.
+- No long-lived `EPROCESS` reference retained.
+- User-mode ABI remains protocol v3.
+
+## v0.2.5 destructive rename protection — implementation under validation
+
+- Intercept `FileRenameInformation` / `FileRenameInformationEx`.
+- Deny protected-source move-out beyond all protected roots.
+- Deny rename-with-replace targeting a protected destination.
+- Allow ordinary rename/move operations that remain within protected roots.
+- Keep delete grants delete-only; rename events are non-approvable.
+- Runtime harness uses protected/unprotected sibling directories under the fixed safe VM test root to validate both rename-denial classes and their Relay events.
+
+Remaining review items after v0.2.5:
+
+- execute the loaded-driver rename suite under Driver Verifier;
+- hard-link / alternate-namespace threat model;
+- normalized-name / NTFS tunneling runtime review;
+- recovery/uninstall and service/driver tamper-hardening.
 
 ## v0.3 volume protection
 
