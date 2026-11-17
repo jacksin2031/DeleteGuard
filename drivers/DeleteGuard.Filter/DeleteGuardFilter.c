@@ -59,10 +59,15 @@ static NTSTATUS DgPortMessage(
 
 static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data);
 static BOOLEAN DgSetInfoRequestsRename(_In_ PFLT_CALLBACK_DATA Data);
+static BOOLEAN DgSetInfoRequestsLink(_In_ PFLT_CALLBACK_DATA Data);
 static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
     _Inout_ PFLT_CALLBACK_DATA Data,
     _In_ DG_DELETE_OPERATION Operation);
 static FLT_PREOP_CALLBACK_STATUS DgEnforceRename(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
+static FLT_PREOP_CALLBACK_STATUS DgEnforceLink(
     _Inout_ PFLT_CALLBACK_DATA Data,
     _In_ PCFLT_RELATED_OBJECTS FltObjects,
     _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
@@ -267,6 +272,10 @@ static FLT_PREOP_CALLBACK_STATUS DgPreSetInformation(
         return DgEnforceRename(Data, FltObjects, CompletionContext);
     }
 
+    if (DgSetInfoRequestsLink(Data)) {
+        return DgEnforceLink(Data, FltObjects, CompletionContext);
+    }
+
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
@@ -339,6 +348,12 @@ static BOOLEAN DgSetInfoRequestsRename(_In_ PFLT_CALLBACK_DATA Data)
 {
     FILE_INFORMATION_CLASS infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
     return infoClass == FileRenameInformation || infoClass == FileRenameInformationEx;
+}
+
+static BOOLEAN DgSetInfoRequestsLink(_In_ PFLT_CALLBACK_DATA Data)
+{
+    FILE_INFORMATION_CLASS infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    return infoClass == FileLinkInformation || infoClass == FileLinkInformationEx;
 }
 
 static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
@@ -541,7 +556,7 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRename(
     }
 
     sourceProtected = DgIsProtectedPath(&sourceInfo->Name);
-    sourceContainsProtectedRoot = !sourceProtected && DgPathContainsProtectedRoot(&sourceInfo->Name);
+    sourceContainsProtectedRoot = DgPathContainsProtectedRoot(&sourceInfo->Name);
 
     if (sourceContainsProtectedRoot) {
         DgPublishDeniedEvent(
@@ -641,6 +656,182 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRename(
         destinationNormalized);
 }
 
+static FLT_PREOP_CALLBACK_STATUS DgEnforceLink(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _Flt_CompletionContext_Outptr_ PVOID *CompletionContext)
+{
+    FILE_INFORMATION_CLASS infoClass;
+    PFILE_LINK_INFORMATION linkInfo;
+    PFLT_FILE_NAME_INFORMATION sourceInfo = NULL;
+    PFLT_FILE_NAME_INFORMATION destinationInfo = NULL;
+    PWSTR destinationName = NULL;
+    HANDLE rootDirectory = NULL;
+    ULONG destinationNameLength = 0;
+    ULONG inputLength;
+    ULONG minimumLength;
+    ULONG processId;
+    BOOLEAN sourceProtected;
+    BOOLEAN destinationProtected;
+    BOOLEAN replaceIfExists = FALSE;
+    BOOLEAN sourceNormalized = FALSE;
+    BOOLEAN destinationNormalized = FALSE;
+    NTSTATUS status;
+
+    if (CompletionContext == NULL || FltObjects == NULL || FltObjects->Instance == NULL || Data->Iopb->TargetFileObject == NULL) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+    *CompletionContext = NULL;
+
+    infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    linkInfo = (PFILE_LINK_INFORMATION)Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
+    inputLength = Data->Iopb->Parameters.SetFileInformation.Length;
+    minimumLength = FIELD_OFFSET(FILE_LINK_INFORMATION, FileName);
+
+    if (linkInfo == NULL || inputLength < minimumLength) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    __try {
+        rootDirectory = linkInfo->RootDirectory;
+        destinationNameLength = linkInfo->FileNameLength;
+        replaceIfExists = infoClass == FileLinkInformation
+            ? (linkInfo->ReplaceIfExists ? TRUE : FALSE)
+            : (FlagOn(linkInfo->Flags, FILE_LINK_REPLACE_IF_EXISTS) ? TRUE : FALSE);
+
+        if (destinationNameLength == 0 ||
+            (destinationNameLength % sizeof(WCHAR)) != 0 ||
+            destinationNameLength > inputLength - minimumLength) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+
+        destinationName = (PWSTR)ExAllocatePool2(
+            POOL_FLAG_NON_PAGED,
+            destinationNameLength,
+            DG_RENAME_BUFFER_TAG);
+        if (destinationName == NULL) {
+            Data->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+            Data->IoStatus.Information = 0;
+            return FLT_PREOP_COMPLETE;
+        }
+
+        RtlCopyMemory(destinationName, linkInfo->FileName, destinationNameLength);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (destinationName != NULL) {
+            ExFreePool(destinationName);
+        }
+        Data->IoStatus.Status = GetExceptionCode();
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
+    processId = FltGetRequestorProcessId(Data);
+
+    status = FltGetFileNameInformation(
+        Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &sourceInfo);
+    if (NT_SUCCESS(status) && sourceInfo != NULL) {
+        sourceNormalized = TRUE;
+    }
+    else {
+        status = FltGetFileNameInformation(
+            Data,
+            FLT_FILE_NAME_OPENED | FLT_FILE_NAME_QUERY_DEFAULT,
+            &sourceInfo);
+    }
+
+    if (!NT_SUCCESS(status) || sourceInfo == NULL) {
+        ExFreePool(destinationName);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    sourceProtected = DgIsProtectedPath(&sourceInfo->Name);
+    if (!sourceProtected && !replaceIfExists) {
+        ExFreePool(destinationName);
+        return DgAllowRenameWithNameLifecycle(
+            Data,
+            CompletionContext,
+            sourceInfo,
+            sourceNormalized,
+            NULL,
+            FALSE);
+    }
+
+    status = FltGetDestinationFileNameInformation(
+        FltObjects->Instance,
+        Data->Iopb->TargetFileObject,
+        rootDirectory,
+        destinationName,
+        destinationNameLength,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &destinationInfo);
+
+    ExFreePool(destinationName);
+    destinationName = NULL;
+
+    if (NT_SUCCESS(status) && destinationInfo != NULL) {
+        destinationNormalized = TRUE;
+    }
+    else {
+        if (sourceProtected || (replaceIfExists && DgHasProtectedRoots())) {
+            DgPublishDeniedEvent(
+                &sourceInfo->Name,
+                processId,
+                DgEventHardLinkDenied,
+                sourceProtected ? DgDeleteOperationHardLinkOut : DgDeleteOperationReplaceProtectedLinkDestination);
+            FltReleaseFileNameInformation(sourceInfo);
+            Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+            Data->IoStatus.Information = 0;
+            return FLT_PREOP_COMPLETE;
+        }
+
+        return DgAllowRenameWithNameLifecycle(
+            Data,
+            CompletionContext,
+            sourceInfo,
+            sourceNormalized,
+            NULL,
+            FALSE);
+    }
+
+    destinationProtected = DgIsProtectedPath(&destinationInfo->Name);
+
+    if (replaceIfExists && destinationProtected) {
+        DgPublishDeniedEvent(
+            &destinationInfo->Name,
+            processId,
+            DgEventHardLinkDenied,
+            DgDeleteOperationReplaceProtectedLinkDestination);
+        FltReleaseFileNameInformation(destinationInfo);
+        FltReleaseFileNameInformation(sourceInfo);
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
+    if (sourceProtected && !destinationProtected) {
+        DgPublishDeniedEvent(
+            &sourceInfo->Name,
+            processId,
+            DgEventHardLinkDenied,
+            DgDeleteOperationHardLinkOut);
+        FltReleaseFileNameInformation(destinationInfo);
+        FltReleaseFileNameInformation(sourceInfo);
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
+    return DgAllowRenameWithNameLifecycle(
+        Data,
+        CompletionContext,
+        sourceInfo,
+        sourceNormalized,
+        destinationInfo,
+        destinationNormalized);
+}
 static VOID DgPublishDeniedEvent(
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG ProcessId,
