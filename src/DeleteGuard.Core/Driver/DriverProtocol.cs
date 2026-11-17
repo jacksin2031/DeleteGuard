@@ -15,7 +15,10 @@ public enum DriverCommandType : uint
     AddRoot = 2,
     RemoveRoot = 3,
     Grant = 4,
-    Revoke = 5
+    Revoke = 5,
+
+    /// <summary>AddRoot with the bulk-delete guard: ProcessId carries the threshold, TtlMilliseconds the window.</summary>
+    AddBulkGuardRoot = 6
 }
 
 public enum DriverEventType : uint
@@ -33,12 +36,27 @@ public enum DriverDeleteOperation : uint
     ReplaceProtectedDestination = 4,
     RenameProtectedAncestor = 5,
     HardLinkOut = 6,
-    ReplaceProtectedLinkDestination = 7
+    ReplaceProtectedLinkDestination = 7,
+
+    /// <summary>Too many deletions inside a bulk-guard folder; the event names the folder, not a file.</summary>
+    BulkDelete = 8
+}
+
+public static class DriverEventRules
+{
+    /// <summary>
+    /// Only a plain denied delete of one specific target may become an approved Broker deletion.
+    /// Namespace denials (rename/link) and bulk-delete events must never be approvable: a bulk event
+    /// names the whole protected folder, so approving it would delete that folder.
+    /// </summary>
+    public static bool IsApprovableDelete(DriverEventType type, DriverDeleteOperation operation) =>
+        type == DriverEventType.DeleteDenied &&
+        operation is DriverDeleteOperation.Disposition or DriverDeleteOperation.DeleteOnClose;
 }
 
 public static class DriverProtocol
 {
-    public const uint Version = 3;
+    public const uint Version = 4;
     public const int MaxPathChars = 520;
     public const string PortName = @"\DeleteGuardPort";
     public const uint MaxGrantTtlMilliseconds = 30_000;
@@ -75,6 +93,10 @@ public struct DriverCommand
 
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = DriverProtocol.MaxPathChars)]
     public string Path;
+
+    /// <summary>Creates AddBulkGuardRoot: block deletions beyond <paramref name="threshold"/> within <paramref name="windowMilliseconds"/>.</summary>
+    public static DriverCommand CreateBulkGuardRoot(string path, uint threshold, uint windowMilliseconds) =>
+        Create(DriverCommandType.AddBulkGuardRoot, path, threshold, windowMilliseconds);
 
     public static DriverCommand Create(
         DriverCommandType type,

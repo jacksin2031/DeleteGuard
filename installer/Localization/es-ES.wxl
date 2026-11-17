@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="es-ES" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="LCID" Value="3082" />
+  <String Id="ProductName" Value="DeleteGuard" />
+  <String Id="Manufacturer" Value="DeleteGuard contributors" />
+  <String Id="Description" Value="Protección contra eliminación con aprobación de administrador para carpetas NTFS" />
+  <String Id="DowngradeError" Value="Ya hay instalada una versión más reciente de DeleteGuard." />
+  <String Id="ShortcutDescription" Value="Abrir la ventana de administración de DeleteGuard" />
+  <String Id="FeatureMainTitle" Value="DeleteGuard" />
+  <String Id="FeatureMainDescription" Value="La herramienta de línea de comandos de DeleteGuard, el Broker con privilegios elevados, el agente de la bandeja del sistema y el entorno de ejecución de .NET que necesitan. No se incluye el controlador del sistema de archivos." />
+  <String Id="FeaturePathTitle" Value="Agregar a PATH" />
+  <String Id="FeaturePathDescription" Value="Permite ejecutar &quot;deleteguard&quot; desde cualquier terminal." />
+  <String Id="FeatureShortcutTitle" Value="Acceso directo en el menú Inicio" />
+  <String Id="FeatureShortcutDescription" Value="Agrega un acceso directo en el menú Inicio a la ventana de administración de DeleteGuard." />
+  <String Id="FeatureAutoStartTitle" Value="Iniciar con Windows" />
+  <String Id="FeatureAutoStartDescription" Value="Inicia el agente de la bandeja de DeleteGuard en segundo plano cuando cualquier usuario inicia sesión." />
+  <String Id="ExitNote" Value="Antes de desinstalar DeleteGuard, quite la protección de sus carpetas (deleteguard unprotect &lt;path&gt;, o la ventana de administración). Desinstalar no quita la protección de las carpetas, y las herramientas normales ya no podrían eliminar su contenido." />
+</WixLocalization>

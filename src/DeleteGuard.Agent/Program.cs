@@ -1,5 +1,6 @@
 using System.Drawing;
 using DeleteGuard.Core.Driver;
+using DeleteGuard.Core.Localization;
 using DeleteGuard.Core.Models;
 using DeleteGuard.Core.Services;
 
@@ -52,6 +53,8 @@ internal sealed class ApprovalContext : ApplicationContext
     private readonly Control _ui = new();
     private readonly EventWaitHandle _showWindowSignal;
     private readonly RegisteredWaitHandle _showWindowRegistration;
+    private readonly ToolStripItem _openItem;
+    private readonly ToolStripItem _exitItem;
     private AgentSettings _settings;
     private ApprovalPromptLimiter _promptLimiter;
     private ManagementForm? _window;
@@ -61,10 +64,12 @@ internal sealed class ApprovalContext : ApplicationContext
     private DateTimeOffset _lastThrottleNoticeUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastUnmappableNoticeUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastNamespaceNoticeUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastBulkNoticeUtc = DateTimeOffset.MinValue;
 
     public ApprovalContext(bool showWindow)
     {
         _settings = _settingsStore.Load();
+        Loc.SetLanguage(_settings.Language);
         _promptLimiter = CreateLimiter(_settings);
 
         foreach (var record in _store.ReadLast(200))
@@ -83,19 +88,19 @@ internal sealed class ApprovalContext : ApplicationContext
             executeOnlyOnce: false);
 
         var menu = new ContextMenuStrip();
-        var openItem = menu.Items.Add("開啟管理視窗", null, (_, _) => ShowWindow());
-        openItem.Font = new Font(openItem.Font, FontStyle.Bold);
+        _openItem = menu.Items.Add(string.Empty, null, (_, _) => ShowWindow());
+        _openItem.Font = new Font(_openItem.Font, FontStyle.Bold);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("結束", null, (_, _) => ExitThread());
+        _exitItem = menu.Items.Add(string.Empty, null, (_, _) => ExitThread());
 
         _notifyIcon = new NotifyIcon
         {
             Icon = SystemIcons.Shield,
-            Text = "DeleteGuard",
             Visible = true,
             ContextMenuStrip = menu
         };
         _notifyIcon.DoubleClick += (_, _) => ShowWindow();
+        ApplyTrayText();
 
         _timer = new System.Windows.Forms.Timer
         {
@@ -114,6 +119,13 @@ internal sealed class ApprovalContext : ApplicationContext
         maxPrompts: settings.MaxPromptsPerWindow,
         window: TimeSpan.FromSeconds(settings.PromptWindowSeconds));
 
+    private void ApplyTrayText()
+    {
+        _openItem.Text = Loc.T("tray.open");
+        _exitItem.Text = Loc.T("tray.exit");
+        _notifyIcon.Text = Loc.T("tray.tooltip");
+    }
+
     private void ShowWindow()
     {
         _window ??= new ManagementForm(_settingsStore, _broker, ApplySettings);
@@ -122,8 +134,31 @@ internal sealed class ApprovalContext : ApplicationContext
 
     private void ApplySettings(AgentSettings settings)
     {
+        var previousLanguage = Loc.Current;
         _settings = settings;
         _promptLimiter = CreateLimiter(settings);
+
+        Loc.SetLanguage(settings.Language);
+        ApplyTrayText();
+        if (Loc.Current != previousLanguage && _window is not null)
+        {
+            // The window was built with the old language. Rebuild it (after the current click handler
+            // returns) on the Settings tab, in the same place on screen.
+            var old = _window;
+            var tab = old.SelectedTab;
+            var location = old.Location;
+            _window = null;
+            _ui.BeginInvoke(() =>
+            {
+                old.Dispose();
+                _window = new ManagementForm(_settingsStore, _broker, ApplySettings, tab)
+                {
+                    StartPosition = FormStartPosition.Manual,
+                    Location = location
+                };
+                _window.ShowAndActivate();
+            });
+        }
     }
 
     protected override void ExitThreadCore()
@@ -166,7 +201,11 @@ internal sealed class ApprovalContext : ApplicationContext
 
                 if (!record.CanApprove)
                 {
-                    if (record.Operation is DriverDeleteOperation.MoveOut
+                    if (record.Operation == DriverDeleteOperation.BulkDelete)
+                    {
+                        ShowBulkNotice(record, decisionTime);
+                    }
+                    else if (record.Operation is DriverDeleteOperation.MoveOut
                         or DriverDeleteOperation.ReplaceProtectedDestination
                         or DriverDeleteOperation.RenameProtectedAncestor
                         or DriverDeleteOperation.HardLinkOut
@@ -226,23 +265,34 @@ internal sealed class ApprovalContext : ApplicationContext
         _lastNamespaceNoticeUtc = now;
         var description = record.Operation switch
         {
-            DriverDeleteOperation.MoveOut =>
-                "DeleteGuard blocked moving protected data outside all protected roots.",
-            DriverDeleteOperation.ReplaceProtectedDestination =>
-                "DeleteGuard blocked replacing a protected destination through a rename operation.",
-            DriverDeleteOperation.RenameProtectedAncestor =>
-                "DeleteGuard blocked renaming a directory that contains a protected root because that would invalidate the protected path policy.",
-            DriverDeleteOperation.HardLinkOut =>
-                "DeleteGuard blocked creating an unprotected hard-link alias to protected data.",
-            DriverDeleteOperation.ReplaceProtectedLinkDestination =>
-                "DeleteGuard blocked replacing a protected destination through hard-link creation.",
-            _ => "DeleteGuard blocked a protected namespace operation."
+            DriverDeleteOperation.MoveOut => Loc.T("notice.namespace.moveOut"),
+            DriverDeleteOperation.ReplaceProtectedDestination => Loc.T("notice.namespace.replaceRename"),
+            DriverDeleteOperation.RenameProtectedAncestor => Loc.T("notice.namespace.ancestor"),
+            DriverDeleteOperation.HardLinkOut => Loc.T("notice.namespace.hardLink"),
+            DriverDeleteOperation.ReplaceProtectedLinkDestination => Loc.T("notice.namespace.replaceLink"),
+            _ => Loc.T("notice.namespace.generic")
         };
 
         _notifyIcon.ShowBalloonTip(
             6000,
-            "DeleteGuard blocked a protected namespace change",
-            $"{description}\n\nPath: {record.TargetPath}\n\nThis namespace operation is intentionally not mapped to the delete broker. Unprotect or change policy explicitly before performing it.",
+            Loc.T("notice.namespace.title"),
+            Loc.T("notice.namespace.body", description, record.TargetPath),
+            ToolTipIcon.Warning);
+    }
+
+    // Not tied to the namespace-notice toggle: a bulk block means something is deleting a lot, quickly.
+    private void ShowBulkNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
+    {
+        if (now - _lastBulkNoticeUtc < TimeSpan.FromSeconds(_settings.NoticeCooldownSeconds))
+        {
+            return;
+        }
+
+        _lastBulkNoticeUtc = now;
+        _notifyIcon.ShowBalloonTip(
+            8000,
+            Loc.T("notice.bulk.title"),
+            Loc.T("notice.bulk.body", record.TargetPath),
             ToolTipIcon.Warning);
     }
 
@@ -256,8 +306,8 @@ internal sealed class ApprovalContext : ApplicationContext
         _lastUnmappableNoticeUtc = now;
         _notifyIcon.ShowBalloonTip(
             5000,
-            "DeleteGuard blocked a deletion",
-            $"A protected delete was denied, but its NT path could not be mapped to a drive-letter path: {record.NtPath}",
+            Loc.T("notice.unmappable.title"),
+            Loc.T("notice.unmappable.body", record.NtPath),
             ToolTipIcon.Warning);
     }
 
@@ -276,8 +326,8 @@ internal sealed class ApprovalContext : ApplicationContext
         _lastThrottleNoticeUtc = now;
         _notifyIcon.ShowBalloonTip(
             6000,
-            "DeleteGuard is limiting approval prompts",
-            "Many protected deletion attempts were blocked. Automatic approval dialogs are temporarily rate-limited. Protected data remains blocked; use 'deleteguard delete <path>' for an explicit administrator-approved deletion.",
+            Loc.T("notice.throttle.title"),
+            Loc.T("notice.throttle.body"),
             ToolTipIcon.Warning);
     }
 
@@ -288,14 +338,8 @@ internal sealed class ApprovalContext : ApplicationContext
             : $"{record.ProcessName} (PID {record.ProcessId})";
 
         var result = MessageBox.Show(
-            $"DeleteGuard blocked a deletion request.\n\n" +
-            $"Target:\n{record.TargetPath}\n\n" +
-            $"Process: {process}\n" +
-            $"Operation: {record.Operation}\n\n" +
-            "Approve deleting this target?\n\n" +
-            "If you choose Yes, Windows will show a UAC administrator prompt. " +
-            "The original application has already received Access Denied; DeleteGuard will perform the approved deletion through its elevated broker.",
-            "DeleteGuard deletion approval",
+            Loc.T("prompt.body", record.TargetPath, process, record.Operation.ToString()),
+            Loc.T("prompt.title"),
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
             MessageBoxDefaultButton.Button2);
@@ -318,8 +362,8 @@ internal sealed class ApprovalContext : ApplicationContext
 
         var reason = result.Failure switch
         {
-            BrokerFailure.BrokerMissing => $"DeleteGuard broker was not found:\n{_broker.BrokerPath}",
-            _ => $"The approved deletion did not complete (exit code {result.ExitCode})." +
+            BrokerFailure.BrokerMissing => Loc.T("prompt.brokerMissing", _broker.BrokerPath),
+            _ => Loc.T("prompt.failed", result.ExitCode) +
                  (string.IsNullOrWhiteSpace(result.Detail) ? string.Empty : $"\n\n{result.Detail}")
         };
         MessageBox.Show(reason, "DeleteGuard", MessageBoxButtons.OK, MessageBoxIcon.Error);

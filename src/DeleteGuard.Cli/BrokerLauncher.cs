@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using DeleteGuard.Core.Localization;
 
 namespace DeleteGuard.Cli;
 
@@ -21,8 +22,8 @@ internal static class BrokerLauncher
         var broker = ResolveBrokerPath();
         if (!File.Exists(broker))
         {
-            Console.Error.WriteLine($"DeleteGuard broker not found: {broker}");
-            Console.Error.WriteLine("Build/package the broker beside deleteguard.exe or set DELETEGUARD_BROKER_PATH.");
+            Console.Error.WriteLine(Loc.T("cli.brokerNotFound", broker));
+            Console.Error.WriteLine(Loc.T("cli.brokerHint"));
             return 4;
         }
 
@@ -44,7 +45,7 @@ internal static class BrokerLauncher
             using var process = Process.Start(startInfo);
             if (process is null)
             {
-                Console.Error.WriteLine("Failed to start elevated broker.");
+                Console.Error.WriteLine(Loc.T("cli.brokerStartFailed"));
                 return 4;
             }
 
@@ -53,7 +54,7 @@ internal static class BrokerLauncher
         }
         catch (Win32Exception exception) when (exception.NativeErrorCode == 1223)
         {
-            Console.Error.WriteLine("Administrator approval was cancelled.");
+            Console.Error.WriteLine(Loc.T("cli.cancelled"));
             return 5;
         }
     }

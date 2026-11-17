@@ -162,7 +162,7 @@ public sealed class RelayWorker : BackgroundService
         }
 
         var mapped = NtPathConverter.TryFromNtPath(driverEvent.Path, out var targetPath);
-        var canApprove = mapped && driverEvent.Type == DriverEventType.DeleteDenied;
+        var canApprove = mapped && DriverEventRules.IsApprovableDelete(driverEvent.Type, driverEvent.Operation);
         var record = new DeniedDeleteEventRecord
         {
             EventId = Guid.NewGuid(),

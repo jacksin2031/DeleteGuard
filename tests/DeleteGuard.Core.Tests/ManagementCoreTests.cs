@@ -224,3 +224,98 @@ public sealed class ManagementCoreTests : IDisposable
         InsertedAclRule = true
     };
 }
+
+public sealed class BulkGuardCoreTests : IDisposable
+{
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), "DeleteGuard.BulkTests", Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_directory))
+        {
+            Directory.Delete(_directory, recursive: true);
+        }
+    }
+
+    private static DeleteGuard.Core.Models.ProtectionPolicy Policy(string root, DeleteGuard.Core.Models.ProtectionMode mode = DeleteGuard.Core.Models.ProtectionMode.Full) => new()
+    {
+        Id = Guid.NewGuid(),
+        RootPath = root,
+        CreatedUtc = DateTimeOffset.UtcNow,
+        CreatedBySid = "S-1-5-21-test",
+        GuardSid = "S-1-1-0",
+        InsertedAclRule = mode == DeleteGuard.Core.Models.ProtectionMode.Full,
+        Mode = mode,
+        BulkThreshold = 40,
+        BulkWindowSeconds = 12
+    };
+
+    [Fact]
+    public void PolicyFileFromAnOlderVersion_LoadsAsFullProtection()
+    {
+        Directory.CreateDirectory(_directory);
+        File.WriteAllText(
+            Path.Combine(_directory, "policies.json"),
+            """
+            [{ "id": "6f1b7c2e-8a44-4d3b-9c25-0d7e5b1a3f90", "rootPath": "C:/Data", "createdUtc": "2026-01-01T00:00:00+00:00",
+               "createdBySid": "S-1-5-21-x", "guardSid": "S-1-1-0", "insertedAclRule": true, "enabled": true }]
+            """);
+
+        var policy = Assert.Single(new DeleteGuard.Core.Services.PolicyStore(_directory).Load());
+
+        Assert.Equal(DeleteGuard.Core.Models.ProtectionMode.Full, policy.Mode);
+        Assert.Equal(DeleteGuard.Core.Models.ProtectionPolicy.DefaultBulkThreshold, policy.BulkThreshold);
+        Assert.Equal(DeleteGuard.Core.Models.ProtectionPolicy.DefaultBulkWindowSeconds, policy.BulkWindowSeconds);
+    }
+
+    [Fact]
+    public void BulkPolicy_RoundTripsWithReadableMode()
+    {
+        var store = new DeleteGuard.Core.Services.PolicyStore(_directory);
+        store.Upsert(Policy(@"C:\Projects", DeleteGuard.Core.Models.ProtectionMode.BulkGuard));
+
+        Assert.Contains("\"mode\": \"BulkGuard\"", File.ReadAllText(store.PolicyFile));
+        var loaded = Assert.Single(store.Load());
+        Assert.Equal(DeleteGuard.Core.Models.ProtectionMode.BulkGuard, loaded.Mode);
+        Assert.Equal(40, loaded.BulkThreshold);
+        Assert.Equal(12, loaded.BulkWindowSeconds);
+        Assert.False(loaded.InsertedAclRule);
+    }
+
+    [Fact]
+    public void BulkGuardCommand_CarriesThresholdAndWindowInTheReservedFields()
+    {
+        var command = DeleteGuard.Core.Driver.DriverCommand.CreateBulkGuardRoot(@"\Device\HarddiskVolume3\Data", 40, 12_000);
+
+        Assert.Equal(DeleteGuard.Core.Driver.DriverCommandType.AddBulkGuardRoot, command.Type);
+        Assert.Equal(40u, command.ProcessId);
+        Assert.Equal(12_000u, command.TtlMilliseconds);
+        Assert.Equal(DeleteGuard.Core.Driver.DriverProtocol.Version, command.Version);
+    }
+
+    [Fact]
+    public void ProtectionList_ShowsBulkFoldersAsDriverOnly_NotAsMissingAcl()
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(_directory, "projects")).FullName;
+        var store = new DeleteGuard.Core.Services.PolicyStore(Path.Combine(_directory, "data"));
+        store.Upsert(Policy(folder, DeleteGuard.Core.Models.ProtectionMode.BulkGuard));
+
+        var entry = Assert.Single(new DeleteGuard.Core.Services.ProtectionListService(store).List());
+
+        Assert.Equal(DeleteGuard.Core.Models.ProtectionMode.BulkGuard, entry.Mode);
+        Assert.Equal(DeleteGuard.Core.Services.AclState.NotApplicable, entry.Acl);
+        Assert.Equal(40, entry.BulkThreshold);
+    }
+
+    [Theory]
+    [InlineData(DeleteGuard.Core.Driver.DriverEventType.DeleteDenied, DeleteGuard.Core.Driver.DriverDeleteOperation.Disposition, true)]
+    [InlineData(DeleteGuard.Core.Driver.DriverEventType.DeleteDenied, DeleteGuard.Core.Driver.DriverDeleteOperation.DeleteOnClose, true)]
+    [InlineData(DeleteGuard.Core.Driver.DriverEventType.DeleteDenied, DeleteGuard.Core.Driver.DriverDeleteOperation.BulkDelete, false)]
+    [InlineData(DeleteGuard.Core.Driver.DriverEventType.RenameDenied, DeleteGuard.Core.Driver.DriverDeleteOperation.MoveOut, false)]
+    [InlineData(DeleteGuard.Core.Driver.DriverEventType.HardLinkDenied, DeleteGuard.Core.Driver.DriverDeleteOperation.HardLinkOut, false)]
+    public void OnlyPlainDeleteDenialsAreApprovable(
+        DeleteGuard.Core.Driver.DriverEventType type,
+        DeleteGuard.Core.Driver.DriverDeleteOperation operation,
+        bool expected) =>
+        Assert.Equal(expected, DeleteGuard.Core.Driver.DriverEventRules.IsApprovableDelete(type, operation));
+}

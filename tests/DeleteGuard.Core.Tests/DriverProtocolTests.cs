@@ -34,6 +34,9 @@ public sealed class DriverProtocolTests
         Assert.Equal(5u, (uint)DriverDeleteOperation.RenameProtectedAncestor);
         Assert.Equal(6u, (uint)DriverDeleteOperation.HardLinkOut);
         Assert.Equal(7u, (uint)DriverDeleteOperation.ReplaceProtectedLinkDestination);
+        Assert.Equal(8u, (uint)DriverDeleteOperation.BulkDelete);
+        Assert.Equal(6u, (uint)DriverCommandType.AddBulkGuardRoot);
+        Assert.Equal(4u, DriverProtocol.Version);
     }
 
     [Fact]

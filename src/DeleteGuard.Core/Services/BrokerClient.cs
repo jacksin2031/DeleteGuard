@@ -13,6 +13,9 @@ public enum BrokerFailure
     StartFailed,
     NotElevated,
     Busy,
+
+    /// <summary>The bulk-delete guard was requested but the minifilter driver is not loaded.</summary>
+    DriverUnavailable,
     Failed
 }
 
@@ -42,7 +45,27 @@ public sealed class BrokerClient
     public bool Exists => File.Exists(BrokerPath);
 
     public Task<BrokerResult> ProtectAsync(string path, bool allowVolumeRoot) =>
-        Task.Run(() => Run("protect", path, allowVolumeRoot ? new[] { "--allow-volume-root" } : Array.Empty<string>()));
+        ProtectAsync(path, allowVolumeRoot, ProtectionMode.Full, 0, 0);
+
+    /// <param name="bulkThreshold">BulkGuard only: deletions allowed per window.</param>
+    /// <param name="bulkWindowSeconds">BulkGuard only: window length in seconds.</param>
+    public Task<BrokerResult> ProtectAsync(string path, bool allowVolumeRoot, ProtectionMode mode, int bulkThreshold, int bulkWindowSeconds)
+    {
+        var options = new List<string>();
+        if (allowVolumeRoot)
+        {
+            options.Add("--allow-volume-root");
+        }
+
+        if (mode == ProtectionMode.BulkGuard)
+        {
+            options.Add("--bulk-guard");
+            options.Add($"--threshold={bulkThreshold}");
+            options.Add($"--window={bulkWindowSeconds}");
+        }
+
+        return Task.Run(() => Run("protect", path, options.ToArray()));
+    }
 
     public Task<BrokerResult> UnprotectAsync(string path) =>
         Task.Run(() => Run("unprotect", path));
@@ -100,6 +123,7 @@ public sealed class BrokerClient
             0 => new BrokerResult(BrokerFailure.None, 0),
             11 => new BrokerResult(BrokerFailure.NotElevated, exitCode),
             12 => new BrokerResult(BrokerFailure.Busy, exitCode),
+            13 => new BrokerResult(BrokerFailure.DriverUnavailable, exitCode),
             _ => new BrokerResult(BrokerFailure.Failed, exitCode, FindRecordedError(command, path, started))
         };
     }

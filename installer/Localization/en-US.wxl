@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="en-US" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="LCID" Value="1033" />
+  <String Id="ProductName" Value="DeleteGuard" />
+  <String Id="Manufacturer" Value="DeleteGuard contributors" />
+  <String Id="Description" Value="Administrator-gated deletion protection for NTFS folders" />
+  <String Id="DowngradeError" Value="A newer version of DeleteGuard is already installed." />
+  <String Id="ShortcutDescription" Value="Open the DeleteGuard management window" />
+  <String Id="FeatureMainTitle" Value="DeleteGuard" />
+  <String Id="FeatureMainDescription" Value="The DeleteGuard command-line tool, elevated broker, tray agent and the .NET runtime they need. The filesystem driver is not included." />
+  <String Id="FeaturePathTitle" Value="Add to PATH" />
+  <String Id="FeaturePathDescription" Value="Lets you run &quot;deleteguard&quot; from any terminal." />
+  <String Id="FeatureShortcutTitle" Value="Start menu shortcut" />
+  <String Id="FeatureShortcutDescription" Value="Adds a Start menu shortcut for the DeleteGuard management window." />
+  <String Id="FeatureAutoStartTitle" Value="Start with Windows" />
+  <String Id="FeatureAutoStartDescription" Value="Starts the DeleteGuard tray agent in the background when any user signs in." />
+  <String Id="ExitNote" Value="Before uninstalling DeleteGuard, remove protection from your folders (deleteguard unprotect &lt;path&gt;, or the management window). Uninstalling does not remove the protection from folders, and ordinary tools could then no longer delete their contents." />
+</WixLocalization>

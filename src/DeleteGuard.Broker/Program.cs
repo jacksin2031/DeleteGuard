@@ -52,6 +52,20 @@ internal static class Program
                 _ => 2
             };
         }
+        catch (DriverUnavailableException exception)
+        {
+            Console.Error.WriteLine($"DeleteGuard: {exception.Message}");
+            TryAudit(new AuditEntry
+            {
+                TimestampUtc = DateTimeOffset.UtcNow,
+                Action = args[0],
+                TargetPath = args[1],
+                Result = "error",
+                ActorSid = CurrentSid(),
+                Detail = exception.Message
+            });
+            return 13;
+        }
         catch (Exception exception)
         {
             Console.Error.WriteLine($"DeleteGuard: {exception.Message}");
@@ -88,6 +102,14 @@ internal static class Program
         AclProtector.EnsureNtfs(path);
         ValidateVolumeRoot(path, options);
 
+        var bulkGuard = options.Any(option => string.Equals(option, "--bulk-guard", StringComparison.OrdinalIgnoreCase));
+        var bulkThreshold = ParseIntOption(options, "--threshold=", ProtectionPolicy.DefaultBulkThreshold, ProtectionPolicy.MinBulkThreshold, ProtectionPolicy.MaxBulkThreshold);
+        var bulkWindowSeconds = ParseIntOption(options, "--window=", ProtectionPolicy.DefaultBulkWindowSeconds, ProtectionPolicy.MinBulkWindowSeconds, ProtectionPolicy.MaxBulkWindowSeconds);
+        if (bulkGuard)
+        {
+            RequireDriver();
+        }
+
         var policies = Store.Load();
         var existing = policies.FirstOrDefault(policy => string.Equals(
             PathRules.Normalize(policy.RootPath),
@@ -113,8 +135,10 @@ internal static class Program
             throw new InvalidOperationException("An equivalent unmanaged DeleteGuard ACL already exists on this path.");
         }
 
-        var inserted = AclProtector.Apply(path);
-        if (!inserted)
+        // Bulk-guard folders get no NTFS ACL: the ACL's DELETE right would also block renames and
+        // overwrite-saves, which this mode exists to leave alone. The driver is the only enforcement.
+        var inserted = bulkGuard ? false : AclProtector.Apply(path);
+        if (!bulkGuard && !inserted)
         {
             throw new InvalidOperationException("Failed to insert the DeleteGuard ACL rule.");
         }
@@ -127,7 +151,10 @@ internal static class Program
             CreatedBySid = CurrentSid(),
             GuardSid = new SecurityIdentifier(WellKnownSidType.WorldSid, null).Value,
             InsertedAclRule = inserted,
-            Enabled = true
+            Enabled = true,
+            Mode = bulkGuard ? ProtectionMode.BulkGuard : ProtectionMode.Full,
+            BulkThreshold = bulkThreshold,
+            BulkWindowSeconds = bulkWindowSeconds
         };
 
         try
@@ -144,7 +171,34 @@ internal static class Program
             throw;
         }
 
-        var driverSynced = TrySyncDriverPolicies();
+        bool driverSynced;
+        try
+        {
+            driverSynced = TrySyncDriverPolicies();
+            if (bulkGuard && !driverSynced)
+            {
+                throw new DriverUnavailableException("The DeleteGuard driver stopped responding; the bulk-delete guard was not enabled.");
+            }
+        }
+        catch when (bulkGuard)
+        {
+            // The folder would otherwise be recorded as protected while nothing enforces it.
+            Store.Remove(policy.Id);
+            throw;
+        }
+
+        if (bulkGuard)
+        {
+            WriteAudit(
+                "protect",
+                path,
+                "allowed",
+                $"bulk-delete guard: more than {bulkThreshold} deletions in {bulkWindowSeconds}s are blocked; minifilter synced");
+            Console.WriteLine($"Protected (bulk-delete guard, {bulkThreshold} deletions / {bulkWindowSeconds} s): {path}");
+            Console.WriteLine("Kernel enforcement: active. There is no ACL fallback for this mode.");
+            return 0;
+        }
+
         WriteAudit(
             "protect",
             path,
@@ -197,6 +251,8 @@ internal static class Program
         var driverGrantActive = false;
         var deleteSucceeded = false;
         var processId = checked((uint)Environment.ProcessId);
+        using var renewalCancellation = new CancellationTokenSource();
+        Task? renewal = null;
 
         try
         {
@@ -207,6 +263,10 @@ internal static class Program
                 driver.SyncPolicies(Store.Load());
                 driver.GrantDelete(processId, path, TimeSpan.FromSeconds(15));
                 driverGrantActive = true;
+
+                // A large deletion can outlast the 15 s grant, and an expired grant would make the
+                // driver block (or, for a bulk-guard folder, count) the rest of it.
+                renewal = RenewGrantUntilCancelled(driver, processId, path, renewalCancellation.Token);
             }
 
             if (policy.InsertedAclRule && Directory.Exists(policy.RootPath))
@@ -227,6 +287,16 @@ internal static class Program
         }
         finally
         {
+            renewalCancellation.Cancel();
+            try
+            {
+                renewal?.Wait(TimeSpan.FromSeconds(3));
+            }
+            catch (AggregateException)
+            {
+                // Renewal is best effort; cleanup below reports real driver errors.
+            }
+
             if (deleteSucceeded && deletingRoot)
             {
                 Store.Remove(policy.Id);
@@ -278,6 +348,63 @@ internal static class Program
             ? "Kernel grant: used and revoked"
             : "Kernel grant: minifilter unavailable; ACL fallback path used");
         return 0;
+    }
+
+    private static Task RenewGrantUntilCancelled(FilterPortClient driver, uint processId, string path, CancellationToken token) =>
+        Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                try
+                {
+                    driver.GrantDelete(processId, path, TimeSpan.FromSeconds(15));
+                }
+                catch (Exception)
+                {
+                    // Best effort: if renewal fails the delete simply meets the normal block.
+                }
+            }
+        });
+
+    private static int ParseIntOption(IReadOnlyCollection<string> options, string prefix, int fallback, int min, int max)
+    {
+        var option = options.FirstOrDefault(value => value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+        if (option is null)
+        {
+            return fallback;
+        }
+
+        if (!int.TryParse(option[prefix.Length..], out var value) || value < min || value > max)
+        {
+            throw new ArgumentOutOfRangeException(prefix.TrimEnd('='), $"{prefix.TrimEnd('=')} must be a whole number from {min} to {max}.");
+        }
+
+        return value;
+    }
+
+    /// <summary>The bulk-delete guard is enforced only by the driver, so it must be reachable now.</summary>
+    private static void RequireDriver()
+    {
+        if (!FilterPortClient.TryConnect(out var probe) || probe is null)
+        {
+            throw new DriverUnavailableException(
+                "The bulk-delete guard needs the DeleteGuard minifilter driver, which is not loaded (or is an older protocol version). " +
+                "Without it this folder would not be protected, so nothing was changed.");
+        }
+
+        using (probe)
+        {
+            probe.Ping();
+        }
     }
 
     private static bool TrySyncDriverPolicies()

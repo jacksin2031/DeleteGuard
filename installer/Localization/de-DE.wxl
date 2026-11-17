@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="de-DE" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="LCID" Value="1031" />
+  <String Id="ProductName" Value="DeleteGuard" />
+  <String Id="Manufacturer" Value="DeleteGuard contributors" />
+  <String Id="Description" Value="Löschschutz mit Administratorgenehmigung für NTFS-Ordner" />
+  <String Id="DowngradeError" Value="Eine neuere Version von DeleteGuard ist bereits installiert." />
+  <String Id="ShortcutDescription" Value="DeleteGuard-Verwaltungsfenster öffnen" />
+  <String Id="FeatureMainTitle" Value="DeleteGuard" />
+  <String Id="FeatureMainDescription" Value="Das DeleteGuard-Befehlszeilenprogramm, der Broker mit erhöhten Rechten, der Infobereich-Agent und die dafür erforderliche .NET-Runtime. Der Dateisystemtreiber ist nicht enthalten." />
+  <String Id="FeaturePathTitle" Value="Zu PATH hinzufügen" />
+  <String Id="FeaturePathDescription" Value="Ermöglicht, „deleteguard“ in jedem Terminal auszuführen." />
+  <String Id="FeatureShortcutTitle" Value="Startmenü-Verknüpfung" />
+  <String Id="FeatureShortcutDescription" Value="Fügt eine Startmenü-Verknüpfung zum DeleteGuard-Verwaltungsfenster hinzu." />
+  <String Id="FeatureAutoStartTitle" Value="Mit Windows starten" />
+  <String Id="FeatureAutoStartDescription" Value="Startet den DeleteGuard-Agent im Hintergrund, wenn sich ein Benutzer anmeldet." />
+  <String Id="ExitNote" Value="Entfernen Sie vor dem Deinstallieren von DeleteGuard den Schutz Ihrer Ordner (deleteguard unprotect &lt;path&gt; oder das Verwaltungsfenster). Das Deinstallieren entfernt den Schutz der Ordner nicht, und normale Werkzeuge könnten deren Inhalt dann nicht mehr löschen." />
+</WixLocalization>

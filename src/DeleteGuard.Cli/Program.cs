@@ -1,5 +1,7 @@
 using System.Security.Principal;
 using DeleteGuard.Core.Driver;
+using DeleteGuard.Core.Localization;
+using DeleteGuard.Core.Models;
 using DeleteGuard.Core.Security;
 using DeleteGuard.Core.Services;
 
@@ -9,6 +11,8 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        ApplyLanguage();
+
         if (args.Length == 0 || IsHelp(args[0]))
         {
             PrintHelp();
@@ -32,7 +36,7 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine($"Error: {exception.Message}");
+            Console.Error.WriteLine(Loc.T("cli.error", exception.Message));
             return 1;
         }
     }
@@ -41,17 +45,63 @@ internal static class Program
     {
         if (args.Length < 2)
         {
-            Console.Error.WriteLine($"Usage: deleteguard {command} <path>{(command == "protect" ? " [--allow-volume-root]" : string.Empty)}");
+            Console.Error.WriteLine($"{Loc.T("cli.usageLabel")}: deleteguard {command} <path>{(command == "protect" ? " [--allow-volume-root]" : string.Empty)}");
             return 2;
         }
 
         var forwarded = new List<string> { command, Path.GetFullPath(args[1]) };
-        if (command == "protect" && args.Skip(2).Any(arg => string.Equals(arg, "--allow-volume-root", StringComparison.OrdinalIgnoreCase)))
+        if (command == "protect")
         {
-            forwarded.Add("--allow-volume-root");
+            var rest = args.Skip(2).ToArray();
+            if (rest.Any(arg => string.Equals(arg, "--allow-volume-root", StringComparison.OrdinalIgnoreCase)))
+            {
+                forwarded.Add("--allow-volume-root");
+            }
+
+            if (rest.Any(arg => string.Equals(arg, "--bulk-guard", StringComparison.OrdinalIgnoreCase)))
+            {
+                forwarded.Add("--bulk-guard");
+                if (!TryForwardNumber(rest, "--threshold", forwarded) || !TryForwardNumber(rest, "--window", forwarded))
+                {
+                    return 2;
+                }
+            }
         }
 
         return BrokerLauncher.RunElevated(forwarded.ToArray());
+    }
+
+    /// <summary>Accepts "--name N" or "--name=N" and forwards it to the Broker as "--name=N".</summary>
+    private static bool TryForwardNumber(string[] args, string name, List<string> forwarded)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            string? value = null;
+            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = i + 1 < args.Length ? args[i + 1] : string.Empty;
+            }
+            else if (args[i].StartsWith(name + "=", StringComparison.OrdinalIgnoreCase))
+            {
+                value = args[i][(name.Length + 1)..];
+            }
+
+            if (value is null)
+            {
+                continue;
+            }
+
+            if (!int.TryParse(value, out var number) || number <= 0)
+            {
+                Console.Error.WriteLine($"{Loc.T("cli.usageLabel")}: deleteguard protect <path> --bulk-guard [--threshold N] [--window SECONDS]");
+                return false;
+            }
+
+            forwarded.Add($"{name}={number}");
+            return true;
+        }
+
+        return true;
     }
 
     private static int ListPolicies()
@@ -60,14 +110,16 @@ internal static class Program
         var policies = store.Load();
         if (policies.Count == 0)
         {
-            Console.WriteLine("No protected paths.");
+            Console.WriteLine(Loc.T("cli.noProtected"));
             return 0;
         }
 
         foreach (var policy in policies.OrderBy(policy => policy.RootPath, StringComparer.OrdinalIgnoreCase))
         {
-            var acl = TryGetAclState(policy.RootPath);
-            Console.WriteLine($"{policy.RootPath}\t{(policy.Enabled ? "enabled" : "disabled")}\tacl={acl}\tcreated={policy.CreatedUtc:O}");
+            var bulk = policy.Mode == ProtectionMode.BulkGuard;
+            var acl = bulk ? "n/a" : TryGetAclState(policy.RootPath);
+            var mode = bulk ? $"bulk({policy.BulkThreshold}/{policy.BulkWindowSeconds}s)" : "full";
+            Console.WriteLine($"{policy.RootPath}\t{(policy.Enabled ? "enabled" : "disabled")}\tacl={acl}\tcreated={policy.CreatedUtc:O}\tmode={mode}");
         }
 
         return 0;
@@ -77,7 +129,7 @@ internal static class Program
     {
         if (args.Length < 2)
         {
-            Console.Error.WriteLine("Usage: deleteguard status <path>");
+            Console.Error.WriteLine($"{Loc.T("cli.usageLabel")}: deleteguard status <path>");
             return 2;
         }
 
@@ -102,7 +154,7 @@ internal static class Program
         var count = 20;
         if (args.Length >= 2 && (!int.TryParse(args[1], out count) || count <= 0 || count > 500))
         {
-            Console.Error.WriteLine("Usage: deleteguard audit [1-500]");
+            Console.Error.WriteLine($"{Loc.T("cli.usageLabel")}: deleteguard audit [1-500]");
             return 2;
         }
 
@@ -191,21 +243,43 @@ internal static class Program
         return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
     }
 
+    /// <summary>Uses the language chosen in the Agent window (per-user settings); defaults to the Windows UI language.</summary>
+    private static void ApplyLanguage()
+    {
+        try
+        {
+            Loc.SetLanguage(new AgentSettingsStore().Load().Language);
+        }
+        catch (Exception)
+        {
+            Loc.SetLanguage(Loc.Auto);
+        }
+
+        // Make sure non-Latin text is not mangled when output goes to the console.
+        try
+        {
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+        }
+        catch (IOException)
+        {
+        }
+    }
+
     private static bool IsHelp(string value) => value is "help" or "--help" or "-h" or "/?";
 
     private static int UnknownCommand(string command)
     {
-        Console.Error.WriteLine($"Unknown command: {command}");
+        Console.Error.WriteLine(Loc.T("cli.unknownCommand", command));
         PrintHelp();
         return 2;
     }
 
     private static void PrintHelp()
     {
-        Console.WriteLine("DeleteGuard v0.2 - administrator-gated deletion protection for NTFS paths");
+        Console.WriteLine(Loc.T("cli.help.title"));
         Console.WriteLine();
-        Console.WriteLine("Usage:");
-        Console.WriteLine("  deleteguard protect <path> [--allow-volume-root]");
+        Console.WriteLine($"{Loc.T("cli.usageLabel")}:");
+        Console.WriteLine("  deleteguard protect <path> [--allow-volume-root] [--bulk-guard [--threshold N] [--window SECONDS]]");
         Console.WriteLine("  deleteguard unprotect <path>");
         Console.WriteLine("  deleteguard delete <path>");
         Console.WriteLine("  deleteguard status <path>");
@@ -213,8 +287,9 @@ internal static class Program
         Console.WriteLine("  deleteguard audit [count]");
         Console.WriteLine("  deleteguard doctor");
         Console.WriteLine();
-        Console.WriteLine("Ordinary Explorer/cmd/PowerShell/app deletion attempts are denied by the ACL fallback");
-        Console.WriteLine("and, when installed/running, by the DeleteGuard filesystem minifilter.");
-        Console.WriteLine("Use 'deleteguard delete' to request a UAC-approved scoped deletion grant.");
+        Console.WriteLine(Loc.T("cli.help.note1"));
+        Console.WriteLine(Loc.T("cli.help.note2"));
+        Console.WriteLine(Loc.T("cli.help.note3"));
+        Console.WriteLine(Loc.T("cli.help.bulk"));
     }
 }

@@ -1,8 +1,9 @@
 #pragma once
 
 #include <fltKernel.h>
+#include "DeleteGuardBulk.h"
 
-#define DG_PROTOCOL_VERSION 3u
+#define DG_PROTOCOL_VERSION 4u
 #define DG_PORT_NAME L"\\DeleteGuardPort"
 #define DG_MAX_PATH_CHARS 520
 #define DG_MAX_ROOTS 64
@@ -19,7 +20,10 @@ typedef enum _DG_COMMAND_TYPE {
     DgCommandAddRoot = 2,
     DgCommandRemoveRoot = 3,
     DgCommandGrant = 4,
-    DgCommandRevoke = 5
+    DgCommandRevoke = 5,
+    /* AddRoot with the bulk-delete guard instead of full protection:
+       ProcessId carries the deletion threshold, TtlMilliseconds the window length. */
+    DgCommandAddBulkGuardRoot = 6
 } DG_COMMAND_TYPE;
 
 typedef enum _DG_EVENT_TYPE {
@@ -35,7 +39,8 @@ typedef enum _DG_DELETE_OPERATION {
     DgDeleteOperationReplaceProtectedDestination = 4,
     DgDeleteOperationRenameProtectedAncestor = 5,
     DgDeleteOperationHardLinkOut = 6,
-    DgDeleteOperationReplaceProtectedLinkDestination = 7
+    DgDeleteOperationReplaceProtectedLinkDestination = 7,
+    DgDeleteOperationBulkDelete = 8
 } DG_DELETE_OPERATION;
 
 typedef struct _DG_CONNECT_CONTEXT {
@@ -65,9 +70,15 @@ typedef struct _DG_EVENT {
     WCHAR Path[DG_MAX_PATH_CHARS];
 } DG_EVENT, *PDG_EVENT;
 
+#define DG_ROOT_MODE_FULL 0u
+#define DG_ROOT_MODE_BULK 1u
+
 typedef struct _DG_ROOT_ENTRY {
     USHORT Length;
     WCHAR Path[DG_MAX_PATH_CHARS];
+    ULONG Mode;            /* DG_ROOT_MODE_* */
+    KSPIN_LOCK BulkLock;   /* guards Bulk; a zeroed entry is a valid unlocked, unconfigured one */
+    DG_BULK_STATE Bulk;    /* used only when Mode == DG_ROOT_MODE_BULK */
 } DG_ROOT_ENTRY, *PDG_ROOT_ENTRY;
 
 typedef struct _DG_GRANT_ENTRY {
