@@ -2,7 +2,7 @@
 
 DeleteGuard is a Windows protection tool that makes deletion of selected NTFS folders or data volumes an **administrator-approved action**.
 
-## v0.2.1 architecture
+## v0.2.x architecture
 
 DeleteGuard now has three cooperating protection/UI layers:
 
@@ -69,8 +69,10 @@ The minifilter currently gates:
 - `FileDispositionInformation`
 - `FileDispositionInformationEx`
 - `FILE_DELETE_ON_CLOSE`
+- `FileRenameInformation` / `FileRenameInformationEx` (and the kernel-only `BypassAccessCheck` classes): move-out of a protected root, rename-with-replace onto a protected destination, and renaming an ancestor directory that contains a protected root are denied
+- `FileLinkInformation` / `FileLinkInformationEx` (and the `BypassAccessCheck` classes): hard links to a protected file outside its root, and link-with-replace onto a protected destination, are denied
 
-This covers the normal destructive delete paths used by Explorer, shell commands, PowerShell and Win32 applications once the driver is installed and active.
+This covers the normal destructive delete paths used by Explorer, shell commands, PowerShell and Win32 applications once the driver is installed and active. Rename and hard-link denials are never approvable: a delete grant does not authorize namespace changes. See [SECURITY.md](SECURITY.md) for the exact scope and remaining gaps.
 
 ## Build user-mode package
 

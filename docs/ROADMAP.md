@@ -94,8 +94,32 @@ Remaining review items after v0.2.5:
 
 - execute all loaded-driver rename suites under Driver Verifier;
 - retain allowed-rename/name-tunneling runtime evidence;
-- hard-link / alternate-namespace threat model;
+- alternate-namespace threat model beyond hard links (reparse points, streams, short names);
 - recovery/uninstall and service/driver tamper-hardening.
+
+## v0.2.6 hard-link alias containment — implementation in validation
+
+- Gate `FileLinkInformation`, `FileLinkInformationEx` and their kernel-only `BypassAccessCheck` variants.
+- A protected file may gain hard-link aliases only inside the same protecting root (`HardLinkOut = 6`).
+- Link-with-replace cannot replace a protected destination (`ReplaceProtectedLinkDestination = 7`).
+- If a protected-source or replace-existing destination cannot be resolved, the request fails closed.
+- Hard-link denials use `HardLinkDenied` events and remain non-approvable by the Agent.
+- The rename gate also covers the kernel-only `FileRenameInformationBypassAccessCheck` / `...ExBypassAccessCheck` classes.
+- Managed tests lock protocol versions, structure sizes and every enum value, and parse `DeleteGuardFilter.h` so native and managed definitions cannot drift apart.
+- CI compiles `scripts/testvm/HardLinkProbe.cs` under Windows PowerShell 5.1 in addition to parsing every test-VM script.
+- New disposable-VM harnesses: `run-hardlink-validation.ps1` (external alias denial, same-root allow, native replace denial, ACL-relaxation race) and `run-rename-boundary-validation.ps1` (bidirectional rename race).
+
+Release gate remaining: execute all loaded-driver suites under Driver Verifier in a disposable Windows 11 VM and retain the evidence.
+
+## v0.2.7 consolidation
+
+The v0.2.5/v0.2.6 work was developed on three parallel lines that each re-implemented the same rename hooks with incompatible protocol values. They were consolidated onto the `hardlink-namespace` line (protocol operations 3–7) and the unique parts of the others were ported:
+
+- the hard-link kernel gate, previously staged behind a self-committing CI workflow whose final anchor could never match, is now ordinary reviewed source;
+- the hard-link and rename-boundary VM harnesses, the probe-compile CI step and the ABI parity tests;
+- the unresolved-replace fail-closed behaviour of the rename-resolution line was already present on this line and needed no port.
+
+The previous line tips are preserved as `archive/*` branches and the original remote branches are untouched.
 
 ## v0.3 volume protection
 

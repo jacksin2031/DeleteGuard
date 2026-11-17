@@ -29,6 +29,10 @@ Use this checklist together with `docs/RUNTIME-VALIDATION.md`.
 - [ ] Event Relay records `MoveOut` and `ReplaceProtectedDestination` operation values
 - [ ] both direct rename denial events are `canApprove: false`
 - [ ] `run-protected-ancestor-rename-validation.ps1` passes under Driver Verifier
+- [ ] `run-rename-boundary-validation.ps1` passes under Driver Verifier
+- [ ] `run-hardlink-validation.ps1` passes under Driver Verifier
+- [ ] an external hard link to a protected file is denied and the same-root link is allowed
+- [ ] hard-link denial events are `canApprove: false`
 - [ ] an ancestor directory containing a protected root cannot be renamed
 - [ ] the configured protected root remains at its original path after the denied ancestor rename
 - [ ] Event Relay records `RenameProtectedAncestor = 5`

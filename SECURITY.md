@@ -82,9 +82,21 @@ DeleteGuard is not yet a complete storage-integrity boundary. Current developmen
 - offline access from another OS or physical media access;
 - filesystem corruption or hardware failure;
 - a determined local administrator that deliberately disables/uninstalls/tampers with the development protection stack;
-- every alternate NTFS namespace mechanism. Hard links and other alternate namespace mechanisms remain explicit threat-model/runtime-review items.
+- every alternate NTFS namespace mechanism. Hard-link aliases are gated since v0.2.6, but reparse points, alternate data streams, short (8.3) names and cross-volume behaviour remain explicit threat-model/runtime-review items.
 
 The filter currently attaches to NTFS only.
+
+## Namespace mutation gate
+
+Delete grants never authorize namespace changes. The filter denies, without any approval path:
+
+- renaming/moving a protected source outside every protected root;
+- rename-with-replace onto a protected destination;
+- renaming an ancestor directory that contains a protected root;
+- creating a hard link to a protected file outside its protecting root (`FileLinkInformation*`);
+- link-with-replace onto a protected destination.
+
+If a protected source or replace-existing destination cannot be resolved safely, the request fails closed. The kernel-only `...BypassAccessCheck` information classes are gated like their user-mode counterparts.
 
 ## Development status
 

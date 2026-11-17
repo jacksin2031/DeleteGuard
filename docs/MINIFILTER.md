@@ -164,7 +164,7 @@ Before any public/production driver release, DeleteGuard still needs:
 2. a production driver signing / attestation or HLK path as applicable;
 3. recorded loaded-driver VM runs under Driver Verifier with no violations;
 4. stress/race and destructive-rename runtime results retained as release evidence;
-5. hard-link/alternate-namespace and name-resolution/tunneling runtime threat-model review;
+5. alternate-namespace (reparse point, stream, short name) and name-resolution/tunneling runtime threat-model review, plus loaded-driver evidence for the hard-link gate;
 6. service/driver tamper-hardening review and recovery/uninstall validation.
 
 The altitude in `DeleteGuardFilter.inf` is development-only and must not be shipped as a production altitude.
