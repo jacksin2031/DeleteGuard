@@ -1,0 +1,81 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package
+    Name="!(loc.ProductName)"
+    Manufacturer="!(loc.Manufacturer)"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="6F1B7C2E-8A44-4D3B-9C25-0D7E5B1A3F90"
+    Language="!(loc.LCID)"
+    Scope="perMachine"
+    InstallerVersion="500">
+
+    <SummaryInformation Description="!(loc.Description)" />
+
+    <!-- Newer versions replace older ones in place; downgrades are refused. -->
+    <MajorUpgrade DowngradeErrorMessage="!(loc.DowngradeError)" />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="DeleteGuard" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="StartMenuDir" Name="DeleteGuard" />
+    </StandardDirectory>
+
+    <!-- Everything the self-contained publish produced: the four executables and the .NET runtime. -->
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.PayloadDir)\**" />
+    </ComponentGroup>
+
+    <!-- Lets `deleteguard` be run from any terminal. Removed again on uninstall. -->
+    <Component Id="PathEntry" Directory="INSTALLFOLDER" Guid="B6C0E4A1-3F57-4C0B-8E6D-52A9D7C41E10">
+      <Environment Id="DeleteGuardPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
+      <RegistryValue Root="HKLM" Key="SOFTWARE\DeleteGuard\Installer" Name="PathEntry" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="StartMenuShortcut" Directory="StartMenuDir" Guid="0D9A52F7-71B3-4E6C-A3F8-9B1D6E2C7A44">
+      <Shortcut
+        Id="AgentShortcut"
+        Name="DeleteGuard"
+        Description="!(loc.ShortcutDescription)"
+        Target="[INSTALLFOLDER]DeleteGuard.Agent.exe"
+        WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder Id="RemoveStartMenuDir" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\DeleteGuard\Installer" Name="Shortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!-- Off by default (Level 2): start the Agent in the tray for every user at sign-in. -->
+    <Component Id="AutoStartEntry" Directory="INSTALLFOLDER" Guid="7E3B8C10-4A2D-4F95-B1E6-C08D5A9F3B27">
+      <RegistryValue
+        Root="HKLM"
+        Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        Name="DeleteGuardAgent"
+        Type="string"
+        Value="&quot;[INSTALLFOLDER]DeleteGuard.Agent.exe&quot; --background"
+        KeyPath="yes" />
+    </Component>
+
+    <Feature Id="Main" Title="!(loc.FeatureMainTitle)" Description="!(loc.FeatureMainDescription)" Level="1" AllowAbsent="no" ConfigurableDirectory="INSTALLFOLDER" Display="expand">
+      <ComponentGroupRef Id="AppFiles" />
+      <Feature Id="PathFeature" Title="!(loc.FeaturePathTitle)" Description="!(loc.FeaturePathDescription)" Level="1">
+        <ComponentRef Id="PathEntry" />
+      </Feature>
+      <Feature Id="ShortcutFeature" Title="!(loc.FeatureShortcutTitle)" Description="!(loc.FeatureShortcutDescription)" Level="1">
+        <ComponentRef Id="StartMenuShortcut" />
+      </Feature>
+      <Feature Id="AutoStartFeature" Title="!(loc.FeatureAutoStartTitle)" Description="!(loc.FeatureAutoStartDescription)" Level="2">
+        <ComponentRef Id="AutoStartEntry" />
+      </Feature>
+    </Feature>
+
+    <!-- The repository has no license file, so the license page is skipped: Welcome goes straight to feature selection. -->
+    <ui:WixUI Id="WixUI_FeatureTree" />
+    <UI>
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="CustomizeDlg" Order="10" Condition="NOT Installed" />
+      <Publish Dialog="CustomizeDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="10" Condition="NOT Installed" />
+    </UI>
+
+    <!-- Shown on the final page: uninstalling does not remove protection ACLs from folders. -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="!(loc.ExitNote)" />
+  </Package>
+</Wix>

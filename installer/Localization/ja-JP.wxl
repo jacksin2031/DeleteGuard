@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="ja-JP" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="LCID" Value="1041" />
+  <String Id="ProductName" Value="DeleteGuard" />
+  <String Id="Manufacturer" Value="DeleteGuard contributors" />
+  <String Id="Description" Value="NTFS フォルダー向けの、管理者承認が必要な削除保護" />
+  <String Id="DowngradeError" Value="新しいバージョンの DeleteGuard がすでにインストールされています。" />
+  <String Id="ShortcutDescription" Value="DeleteGuard の管理ウィンドウを開きます" />
+  <String Id="FeatureMainTitle" Value="DeleteGuard" />
+  <String Id="FeatureMainDescription" Value="DeleteGuard のコマンドラインツール、昇格 Broker、タスクトレイ Agent、およびそれらに必要な .NET ランタイム。ファイルシステムドライバーは含まれません。" />
+  <String Id="FeaturePathTitle" Value="PATH に追加" />
+  <String Id="FeaturePathDescription" Value="任意のターミナルから「deleteguard」を実行できるようにします。" />
+  <String Id="FeatureShortcutTitle" Value="スタート メニューのショートカット" />
+  <String Id="FeatureShortcutDescription" Value="DeleteGuard 管理ウィンドウのスタート メニュー ショートカットを追加します。" />
+  <String Id="FeatureAutoStartTitle" Value="Windows と同時に起動" />
+  <String Id="FeatureAutoStartDescription" Value="いずれかのユーザーがサインインしたときに、DeleteGuard タスクトレイ Agent をバックグラウンドで起動します。" />
+  <String Id="ExitNote" Value="DeleteGuard をアンインストールする前に、フォルダーの保護を解除してください（deleteguard unprotect &lt;path&gt;、または管理ウィンドウ）。アンインストールしてもフォルダーの保護は解除されず、通常のツールではその内容を削除できなくなります。" />
+</WixLocalization>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="zh-CN" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="LCID" Value="2052" />
+  <String Id="ProductName" Value="DeleteGuard" />
+  <String Id="Manufacturer" Value="DeleteGuard contributors" />
+  <String Id="Description" Value="针对 NTFS 文件夹、需管理员批准的删除保护" />
+  <String Id="DowngradeError" Value="已安装更新版本的 DeleteGuard。" />
+  <String Id="ShortcutDescription" Value="打开 DeleteGuard 管理窗口" />
+  <String Id="FeatureMainTitle" Value="DeleteGuard" />
+  <String Id="FeatureMainDescription" Value="DeleteGuard 命令行工具、提权 Broker、系统托盘 Agent，以及它们所需的 .NET 运行时。不包含文件系统驱动程序。" />
+  <String Id="FeaturePathTitle" Value="添加到 PATH" />
+  <String Id="FeaturePathDescription" Value="使您可以在任何终端中运行“deleteguard”。" />
+  <String Id="FeatureShortcutTitle" Value="开始菜单快捷方式" />
+  <String Id="FeatureShortcutDescription" Value="为 DeleteGuard 管理窗口添加开始菜单快捷方式。" />
+  <String Id="FeatureAutoStartTitle" Value="随 Windows 启动" />
+  <String Id="FeatureAutoStartDescription" Value="任何用户登录时，在后台启动 DeleteGuard 系统托盘 Agent。" />
+  <String Id="ExitNote" Value="卸载 DeleteGuard 之前，请先移除文件夹的保护（deleteguard unprotect &lt;path&gt;，或使用管理窗口）。卸载不会移除文件夹上的保护，之后普通工具将无法删除其中的内容。" />
+</WixLocalization>

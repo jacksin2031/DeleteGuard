@@ -1,0 +1,21 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <!--
+    MSI for the user-mode DeleteGuard package (CLI, Broker, Agent, Event Relay files).
+    Built by scripts/build-installer.ps1, which first publishes a self-contained payload
+    and passes it in as -p:PayloadDir=<folder>. It deliberately does NOT install the
+    development minifilter driver or register the Event Relay service.
+
+    One MSI is produced per culture listed in <Cultures> (installer UI language only).
+  -->
+  <PropertyGroup>
+    <OutputName>DeleteGuard</OutputName>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <Cultures Condition="'$(Cultures)' == ''">en-US</Cultures>
+    <PayloadDir Condition="'$(PayloadDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\installer\payload</PayloadDir>
+    <DefineConstants>$(DefineConstants);PayloadDir=$(PayloadDir);ProductVersion=$(Version)</DefineConstants>
+    <SuppressValidation>false</SuppressValidation>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+  </ItemGroup>
+</Project>

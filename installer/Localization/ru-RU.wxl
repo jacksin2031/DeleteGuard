@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="ru-RU" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="LCID" Value="1049" />
+  <String Id="ProductName" Value="DeleteGuard" />
+  <String Id="Manufacturer" Value="DeleteGuard contributors" />
+  <String Id="Description" Value="Защита папок NTFS от удаления с подтверждением администратора" />
+  <String Id="DowngradeError" Value="Более новая версия DeleteGuard уже установлена." />
+  <String Id="ShortcutDescription" Value="Открыть окно управления DeleteGuard" />
+  <String Id="FeatureMainTitle" Value="DeleteGuard" />
+  <String Id="FeatureMainDescription" Value="Программа командной строки DeleteGuard, Broker с повышенными правами, агент в области уведомлений и необходимая им среда выполнения .NET. Драйвер файловой системы не входит в комплект." />
+  <String Id="FeaturePathTitle" Value="Добавить в PATH" />
+  <String Id="FeaturePathDescription" Value="Позволяет запускать «deleteguard» из любого терминала." />
+  <String Id="FeatureShortcutTitle" Value="Ярлык в меню «Пуск»" />
+  <String Id="FeatureShortcutDescription" Value="Добавляет ярлык окна управления DeleteGuard в меню «Пуск»." />
+  <String Id="FeatureAutoStartTitle" Value="Запускать вместе с Windows" />
+  <String Id="FeatureAutoStartDescription" Value="Запускает агент DeleteGuard в фоне, когда любой пользователь входит в систему." />
+  <String Id="ExitNote" Value="Перед удалением DeleteGuard снимите защиту с ваших папок (deleteguard unprotect &lt;path&gt; или окно управления). Удаление программы не снимает защиту с папок, и обычные средства больше не смогут удалять их содержимое." />
+</WixLocalization>

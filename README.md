@@ -123,6 +123,31 @@ artifacts\driver-x64
 
 The CI driver artifact is intentionally **unsigned**. Do not load it on a production machine. See [docs/MINIFILTER.md](docs/MINIFILTER.md).
 
+## Languages
+
+The Agent window, approval prompts, notifications and CLI help are available in English, 繁體中文, 简体中文, 日本語, 한국어, Español, Français, Deutsch, Português (Brasil) and Русский. "Automatic" (the default) follows the Windows display language; choose another one in the management window's Settings tab. The CLI reads the same per-user setting. Machine-readable output (`list`, `status`) and the Broker's audit data stay in English.
+
+Translations other than English and Traditional Chinese have not been reviewed by native speakers. `LocalizationTests` guarantees every language has the same keys and `{n}` placeholders as English, so a missing or mismatched string fails CI; corrections are welcome as edits to `src/DeleteGuard.Core/Localization/Strings.<Language>.cs`.
+
+## Installer (MSI)
+
+```powershell
+.\scripts\build-installer.ps1                    # all ten installer languages
+.\scripts\build-installer.ps1 -Cultures en-US    # just one
+```
+
+This publishes the CLI, Broker, Agent and Event Relay self-contained (no .NET install needed on the target) and builds one `artifacts\installer\DeleteGuard-<version>-x64-<culture>.msi` per language. The culture only selects the installer's own language; every MSI installs the same files. The build downloads the pinned WiX 5 toolset from NuGet on first use.
+
+The MSI installs to `C:\Program Files\DeleteGuard` and offers these features:
+
+- **Add to PATH** (on) — so `deleteguard` works in any terminal;
+- **Start menu shortcut** (on) — opens the management window;
+- **Start with Windows** (off) — starts the tray Agent in the background for every user at sign-in.
+
+It does **not** install the minifilter driver (unsigned development driver) and does **not** register the Event Relay service; use `scripts\install-approval.ps1` for the service. Later versions upgrade in place; downgrades are refused.
+
+Uninstalling removes the program but **not** the protection ACLs on your folders, nor `%ProgramData%\DeleteGuard`. Run `deleteguard unprotect <path>` (or use the management window) for each protected folder *before* uninstalling; the installer's final page repeats this reminder. The MSIs are unsigned, so Windows SmartScreen will warn when you run them. The repository has no license file yet, so the installer skips its license page.
+
 ## Install user-mode package
 
 From an elevated PowerShell:

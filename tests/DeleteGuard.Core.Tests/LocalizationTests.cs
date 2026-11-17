@@ -129,3 +129,66 @@ public sealed class LocalizationTests
         Assert.Equal("pt-BR", new AgentSettings { Language = "PT-br" }.Normalize().Language);
     }
 }
+
+/// <summary>Keeps the MSI's own localization files in step with each other and with the app languages.</summary>
+public sealed class InstallerLocalizationTests
+{
+    private static readonly string[] Cultures =
+        { "en-US", "zh-TW", "zh-CN", "ja-JP", "ko-KR", "es-ES", "fr-FR", "de-DE", "pt-BR", "ru-RU" };
+
+    private static string LocalizationDirectory()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, "installer", "Localization");
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new DirectoryNotFoundException("installer/Localization was not found above the test output directory.");
+    }
+
+    private static System.Xml.Linq.XDocument Load(string culture) =>
+        System.Xml.Linq.XDocument.Load(Path.Combine(LocalizationDirectory(), culture + ".wxl"));
+
+    private static Dictionary<string, string> Strings(string culture) =>
+        Load(culture).Root!.Elements()
+            .Where(element => element.Name.LocalName == "String")
+            .ToDictionary(element => (string)element.Attribute("Id")!, element => (string)element.Attribute("Value")!);
+
+    public static IEnumerable<object[]> InstallerCultures() => Cultures.Select(culture => new object[] { culture });
+
+    [Fact]
+    public void EveryAppLanguage_HasAnInstallerCulture()
+    {
+        // Each app language code ("zh-TW", "ja", "pt-BR"...) must map to one installer culture file.
+        foreach (var option in Loc.Supported)
+        {
+            var language = option.Code.Split('-')[0];
+            Assert.Contains(Cultures, culture => culture.StartsWith(language, StringComparison.OrdinalIgnoreCase));
+        }
+
+        Assert.Equal(Loc.Supported.Count, Cultures.Length);
+    }
+
+    [Theory]
+    [MemberData(nameof(InstallerCultures))]
+    public void WxlFile_MatchesEnglishIds_HasNoBlankValues_AndRightCulture(string culture)
+    {
+        var english = Strings("en-US");
+        var other = Strings(culture);
+
+        Assert.Equal(culture, (string?)Load(culture).Root!.Attribute("Culture"));
+        Assert.Empty(english.Keys.Except(other.Keys));
+        Assert.Empty(other.Keys.Except(english.Keys));
+        foreach (var (id, value) in other)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(value), $"{culture}:{id} is blank");
+        }
+
+        Assert.True(int.TryParse(other["LCID"], out var lcid) && lcid > 0, $"{culture}: LCID must be a number");
+        Assert.Equal(lcid, CultureInfo.GetCultureInfo(culture).LCID);
+    }
+}

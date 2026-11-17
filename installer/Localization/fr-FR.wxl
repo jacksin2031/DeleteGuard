@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="fr-FR" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="LCID" Value="1036" />
+  <String Id="ProductName" Value="DeleteGuard" />
+  <String Id="Manufacturer" Value="DeleteGuard contributors" />
+  <String Id="Description" Value="Protection contre la suppression sous approbation administrateur pour les dossiers NTFS" />
+  <String Id="DowngradeError" Value="Une version plus récente de DeleteGuard est déjà installée." />
+  <String Id="ShortcutDescription" Value="Ouvrir la fenêtre de gestion de DeleteGuard" />
+  <String Id="FeatureMainTitle" Value="DeleteGuard" />
+  <String Id="FeatureMainDescription" Value="L'outil en ligne de commande DeleteGuard, le Broker avec élévation de privilèges, l'agent de la zone de notification et le runtime .NET dont ils ont besoin. Le pilote du système de fichiers n'est pas inclus." />
+  <String Id="FeaturePathTitle" Value="Ajouter au PATH" />
+  <String Id="FeaturePathDescription" Value="Permet d'exécuter « deleteguard » depuis n'importe quel terminal." />
+  <String Id="FeatureShortcutTitle" Value="Raccourci du menu Démarrer" />
+  <String Id="FeatureShortcutDescription" Value="Ajoute un raccourci du menu Démarrer vers la fenêtre de gestion de DeleteGuard." />
+  <String Id="FeatureAutoStartTitle" Value="Démarrer avec Windows" />
+  <String Id="FeatureAutoStartDescription" Value="Démarre l'agent DeleteGuard en arrière-plan lorsqu'un utilisateur ouvre une session." />
+  <String Id="ExitNote" Value="Avant de désinstaller DeleteGuard, retirez la protection de vos dossiers (deleteguard unprotect &lt;path&gt;, ou la fenêtre de gestion). La désinstallation ne retire pas la protection des dossiers, et les outils ordinaires ne pourraient alors plus en supprimer le contenu." />
+</WixLocalization>
