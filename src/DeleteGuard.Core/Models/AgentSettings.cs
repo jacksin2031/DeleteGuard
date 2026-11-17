@@ -1,3 +1,5 @@
+using DeleteGuard.Core.Localization;
+
 namespace DeleteGuard.Core.Models;
 
 /// <summary>
@@ -30,10 +32,14 @@ public sealed record AgentSettings
     public bool ShowThrottleNotices { get; init; } = true;
     public int NoticeCooldownSeconds { get; init; } = 15;
 
+    /// <summary>"auto" (follow the Windows UI language) or a supported language code such as "zh-TW".</summary>
+    public string Language { get; init; } = Loc.Auto;
+
     public static AgentSettings Default { get; } = new();
 
     public AgentSettings Normalize() => this with
     {
+        Language = Loc.NormalizeSetting(Language),
         MaxPromptsPerWindow = Math.Clamp(MaxPromptsPerWindow, MinPromptsPerWindow, MaxPromptsPerWindowLimit),
         PromptWindowSeconds = Math.Clamp(PromptWindowSeconds, MinPromptWindowSeconds, MaxPromptWindowSeconds),
         PromptMaxAgeSeconds = Math.Clamp(PromptMaxAgeSeconds, MinPromptMaxAgeSeconds, MaxPromptMaxAgeSeconds),

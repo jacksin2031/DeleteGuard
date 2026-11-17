@@ -1,5 +1,6 @@
 using System.Security.Principal;
 using DeleteGuard.Core.Driver;
+using DeleteGuard.Core.Localization;
 using DeleteGuard.Core.Security;
 using DeleteGuard.Core.Services;
 
@@ -9,6 +10,8 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        ApplyLanguage();
+
         if (args.Length == 0 || IsHelp(args[0]))
         {
             PrintHelp();
@@ -32,7 +35,7 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine($"Error: {exception.Message}");
+            Console.Error.WriteLine(Loc.T("cli.error", exception.Message));
             return 1;
         }
     }
@@ -41,7 +44,7 @@ internal static class Program
     {
         if (args.Length < 2)
         {
-            Console.Error.WriteLine($"Usage: deleteguard {command} <path>{(command == "protect" ? " [--allow-volume-root]" : string.Empty)}");
+            Console.Error.WriteLine($"{Loc.T("cli.usageLabel")}: deleteguard {command} <path>{(command == "protect" ? " [--allow-volume-root]" : string.Empty)}");
             return 2;
         }
 
@@ -60,7 +63,7 @@ internal static class Program
         var policies = store.Load();
         if (policies.Count == 0)
         {
-            Console.WriteLine("No protected paths.");
+            Console.WriteLine(Loc.T("cli.noProtected"));
             return 0;
         }
 
@@ -77,7 +80,7 @@ internal static class Program
     {
         if (args.Length < 2)
         {
-            Console.Error.WriteLine("Usage: deleteguard status <path>");
+            Console.Error.WriteLine($"{Loc.T("cli.usageLabel")}: deleteguard status <path>");
             return 2;
         }
 
@@ -102,7 +105,7 @@ internal static class Program
         var count = 20;
         if (args.Length >= 2 && (!int.TryParse(args[1], out count) || count <= 0 || count > 500))
         {
-            Console.Error.WriteLine("Usage: deleteguard audit [1-500]");
+            Console.Error.WriteLine($"{Loc.T("cli.usageLabel")}: deleteguard audit [1-500]");
             return 2;
         }
 
@@ -191,20 +194,42 @@ internal static class Program
         return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
     }
 
+    /// <summary>Uses the language chosen in the Agent window (per-user settings); defaults to the Windows UI language.</summary>
+    private static void ApplyLanguage()
+    {
+        try
+        {
+            Loc.SetLanguage(new AgentSettingsStore().Load().Language);
+        }
+        catch (Exception)
+        {
+            Loc.SetLanguage(Loc.Auto);
+        }
+
+        // Make sure non-Latin text is not mangled when output goes to the console.
+        try
+        {
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+        }
+        catch (IOException)
+        {
+        }
+    }
+
     private static bool IsHelp(string value) => value is "help" or "--help" or "-h" or "/?";
 
     private static int UnknownCommand(string command)
     {
-        Console.Error.WriteLine($"Unknown command: {command}");
+        Console.Error.WriteLine(Loc.T("cli.unknownCommand", command));
         PrintHelp();
         return 2;
     }
 
     private static void PrintHelp()
     {
-        Console.WriteLine("DeleteGuard v0.2 - administrator-gated deletion protection for NTFS paths");
+        Console.WriteLine(Loc.T("cli.help.title"));
         Console.WriteLine();
-        Console.WriteLine("Usage:");
+        Console.WriteLine($"{Loc.T("cli.usageLabel")}:");
         Console.WriteLine("  deleteguard protect <path> [--allow-volume-root]");
         Console.WriteLine("  deleteguard unprotect <path>");
         Console.WriteLine("  deleteguard delete <path>");
@@ -213,8 +238,8 @@ internal static class Program
         Console.WriteLine("  deleteguard audit [count]");
         Console.WriteLine("  deleteguard doctor");
         Console.WriteLine();
-        Console.WriteLine("Ordinary Explorer/cmd/PowerShell/app deletion attempts are denied by the ACL fallback");
-        Console.WriteLine("and, when installed/running, by the DeleteGuard filesystem minifilter.");
-        Console.WriteLine("Use 'deleteguard delete' to request a UAC-approved scoped deletion grant.");
+        Console.WriteLine(Loc.T("cli.help.note1"));
+        Console.WriteLine(Loc.T("cli.help.note2"));
+        Console.WriteLine(Loc.T("cli.help.note3"));
     }
 }

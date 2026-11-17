@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Text.Json;
+using DeleteGuard.Core.Localization;
 using DeleteGuard.Core.Models;
 using DeleteGuard.Core.Services;
 
@@ -8,6 +9,7 @@ namespace DeleteGuard.Agent;
 /// <summary>
 /// Management window: protected-folder list, settings and activity history.
 /// The window never elevates; every change to protection goes through the Broker's UAC prompt.
+/// All text comes from <see cref="Loc"/>; the window is rebuilt when the language changes.
 /// </summary>
 internal sealed class ManagementForm : Form
 {
@@ -41,6 +43,7 @@ internal sealed class ManagementForm : Form
     private readonly CheckBox _throttleNotices = new();
     private readonly NumericUpDown _noticeCooldown = new();
     private readonly CheckBox _autoStart = new();
+    private readonly ComboBox _language = new();
     private readonly Label _settingsStatus = new();
 
     private readonly ComboBox _logSource = new();
@@ -51,7 +54,8 @@ internal sealed class ManagementForm : Form
     public ManagementForm(
         AgentSettingsStore settingsStore,
         BrokerClient broker,
-        Action<AgentSettings> settingsApplied)
+        Action<AgentSettings> settingsApplied,
+        int initialTab = 0)
     {
         _settingsStore = settingsStore;
         _broker = broker;
@@ -61,17 +65,35 @@ internal sealed class ManagementForm : Form
         _list = new ProtectionListService(policyStore);
         _validator = new ProtectionRequestValidator(policyStore.Load);
 
-        Text = "DeleteGuard 管理";
+        Text = Loc.T("app.title");
         Icon = SystemIcons.Shield;
         AutoScaleMode = AutoScaleMode.Dpi;
-        Font = new Font("Microsoft JhengHei UI", 9f);
+        Font = PickFont();
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(760, 520);
         ClientSize = new Size(900, 660);
 
         BuildLayout();
         LoadSettingsIntoControls(_settingsStore.Load());
+        _tabs.SelectedIndex = Math.Clamp(initialTab, 0, _tabs.TabCount - 1);
         Activated += (_, _) => RefreshAll();
+    }
+
+    /// <summary>Index of the visible tab, so a rebuilt window can return to it.</summary>
+    public int SelectedTab => _tabs.SelectedIndex;
+
+    /// <summary>A font family that covers the active language's script.</summary>
+    private static Font PickFont()
+    {
+        var family = Loc.Current switch
+        {
+            Loc.TraditionalChinese => "Microsoft JhengHei UI",
+            Loc.SimplifiedChinese => "Microsoft YaHei UI",
+            Loc.Japanese => "Yu Gothic UI",
+            Loc.Korean => "Malgun Gothic",
+            _ => "Segoe UI"
+        };
+        return new Font(family, 9f);
     }
 
     /// <summary>The window lives in the tray: closing hides it instead of ending the Agent.</summary>
@@ -123,7 +145,7 @@ internal sealed class ManagementForm : Form
 
     private TabPage BuildProtectionTab()
     {
-        var page = new TabPage("保護清單") { Padding = new Padding(12) };
+        var page = new TabPage(Loc.T("tab.protected")) { Padding = new Padding(12) };
 
         var intro = new Label
         {
@@ -131,7 +153,8 @@ internal sealed class ManagementForm : Form
             AutoSize = true,
             MaximumSize = new Size(840, 0),
             Padding = new Padding(0, 0, 0, 8),
-            Text = "列在這裡的資料夾無法被一般程式刪除。新增或移除保護都需要 Windows 系統管理員核准（UAC）。"
+            UseCompatibleTextRendering = true,
+            Text = Loc.T("list.intro")
         };
 
         _protectedList.Dock = DockStyle.Fill;
@@ -140,9 +163,9 @@ internal sealed class ManagementForm : Form
         _protectedList.MultiSelect = false;
         _protectedList.HideSelection = false;
         _protectedList.GridLines = false;
-        _protectedList.Columns.Add("資料夾", 400);
-        _protectedList.Columns.Add("狀態", 170);
-        _protectedList.Columns.Add("建立時間", 160);
+        _protectedList.Columns.Add(Loc.T("list.col.folder"), 400);
+        _protectedList.Columns.Add(Loc.T("list.col.state"), 170);
+        _protectedList.Columns.Add(Loc.T("list.col.created"), 160);
         _protectedList.SelectedIndexChanged += (_, _) => UpdateButtons();
         _protectedList.DoubleClick += (_, _) => RemoveSelected();
 
@@ -150,7 +173,7 @@ internal sealed class ManagementForm : Form
         _emptyHint.Height = 56;
         _emptyHint.ForeColor = SystemColors.GrayText;
         _emptyHint.TextAlign = ContentAlignment.MiddleCenter;
-        _emptyHint.Text = "尚未保護任何資料夾。按「新增資料夾…」開始。";
+        _emptyHint.Text = Loc.T("list.empty");
         _emptyHint.Visible = false;
 
         var buttons = new FlowLayoutPanel
@@ -161,9 +184,9 @@ internal sealed class ManagementForm : Form
             Padding = new Padding(0, 10, 0, 0)
         };
 
-        ConfigureButton(_addButton, "新增資料夾…", (_, _) => AddFolder());
-        ConfigureButton(_removeButton, "移除保護", (_, _) => RemoveSelected());
-        ConfigureButton(_refreshButton, "重新整理", (_, _) => RefreshAll());
+        ConfigureButton(_addButton, Loc.T("btn.add"), (_, _) => AddFolder());
+        ConfigureButton(_removeButton, Loc.T("btn.remove"), (_, _) => RemoveSelected());
+        ConfigureButton(_refreshButton, Loc.T("btn.refresh"), (_, _) => RefreshAll());
         _busyLabel.AutoSize = true;
         _busyLabel.Margin = new Padding(12, 7, 0, 0);
         _busyLabel.ForeColor = SystemColors.GrayText;
@@ -179,7 +202,7 @@ internal sealed class ManagementForm : Form
 
     private TabPage BuildSettingsTab()
     {
-        var page = new TabPage("設定") { Padding = new Padding(12), AutoScroll = true };
+        var page = new TabPage(Loc.T("tab.settings")) { Padding = new Padding(12), AutoScroll = true };
 
         var panel = new FlowLayoutPanel
         {
@@ -194,11 +217,11 @@ internal sealed class ManagementForm : Form
             AutoSize = true,
             MaximumSize = new Size(ContentWidth, 0),
             Margin = new Padding(3, 0, 3, 12),
-            Text = "這些設定只影響通知與提示的呈現。保護本身（拒絕刪除、重新命名、硬連結）不受影響；核准刪除一律需要 UAC。"
+            UseCompatibleTextRendering = true,
+            Text = Loc.T("settings.note")
         };
 
-        _showPrompts.Text = "攔截到刪除時，顯示核准／拒絕對話方塊";
-        _showPrompts.AutoSize = true;
+        ConfigureCheck(_showPrompts, Loc.T("settings.showPrompts"));
         _showPrompts.CheckedChanged += (_, _) => UpdateSettingsEnabled();
 
         ConfigureNumeric(_maxPrompts, AgentSettings.MinPromptsPerWindow, AgentSettings.MaxPromptsPerWindowLimit);
@@ -206,33 +229,44 @@ internal sealed class ManagementForm : Form
         ConfigureNumeric(_promptMaxAge, AgentSettings.MinPromptMaxAgeSeconds, AgentSettings.MaxPromptMaxAgeSeconds);
         ConfigureNumeric(_noticeCooldown, AgentSettings.MinNoticeCooldownSeconds, AgentSettings.MaxNoticeCooldownSeconds);
 
-        var promptGroup = Group("核准提示", new Control[]
+        var promptGroup = Group(Loc.T("group.prompts"), new Control[]
         {
             _showPrompts,
-            Row("每個時間窗內最多提示次數", _maxPrompts, "次"),
-            Row("時間窗長度", _promptWindow, "秒"),
-            Row("超過此時間的事件不再提示", _promptMaxAge, "秒")
+            Row(Loc.T("settings.maxPrompts"), _maxPrompts, Loc.T("unit.times")),
+            Row(Loc.T("settings.window"), _promptWindow, Loc.T("unit.seconds")),
+            Row(Loc.T("settings.maxAge"), _promptMaxAge, Loc.T("unit.seconds"))
         });
 
-        _namespaceNotices.Text = "重新命名／移動／硬連結被阻擋時顯示通知";
-        _namespaceNotices.AutoSize = true;
-        _throttleNotices.Text = "提示被限流時顯示通知";
-        _throttleNotices.AutoSize = true;
+        ConfigureCheck(_namespaceNotices, Loc.T("settings.nsNotices"));
+        ConfigureCheck(_throttleNotices, Loc.T("settings.throttleNotices"));
 
-        var noticeGroup = Group("通知", new Control[]
+        var noticeGroup = Group(Loc.T("group.notices"), new Control[]
         {
             _namespaceNotices,
             _throttleNotices,
-            Row("同類通知最短間隔", _noticeCooldown, "秒")
+            Row(Loc.T("settings.cooldown"), _noticeCooldown, Loc.T("unit.seconds"))
         });
 
-        _autoStart.Text = "登入 Windows 時自動在背景啟動 Agent（系統匣）";
-        _autoStart.AutoSize = true;
-        var startupGroup = Group("啟動", new Control[] { _autoStart });
+        ConfigureCheck(_autoStart, Loc.T("settings.autostart"));
+        var startupGroup = Group(Loc.T("group.startup"), new Control[] { _autoStart });
 
-        var save = new Button { Text = "儲存設定", AutoSize = true, Padding = new Padding(10, 3, 10, 3) };
+        _language.DropDownStyle = ComboBoxStyle.DropDownList;
+        _language.Width = 260;
+        _language.Items.Clear();
+        _language.Items.Add(new LanguageItem(Loc.Auto, Loc.T("lang.auto")));
+        foreach (var option in Loc.Supported)
+        {
+            _language.Items.Add(new LanguageItem(option.Code, option.NativeName));
+        }
+
+        var languageRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+        languageRow.Controls.Add(RowLabel(Loc.T("settings.language")));
+        languageRow.Controls.Add(_language);
+        var languageGroup = Group(Loc.T("group.language"), new Control[] { languageRow });
+
+        var save = new Button { Text = Loc.T("btn.save"), AutoSize = true, Padding = new Padding(10, 3, 10, 3) };
         save.Click += (_, _) => SaveSettings();
-        var reset = new Button { Text = "還原預設值", AutoSize = true, Padding = new Padding(10, 3, 10, 3) };
+        var reset = new Button { Text = Loc.T("btn.reset"), AutoSize = true, Padding = new Padding(10, 3, 10, 3) };
         reset.Click += (_, _) => LoadSettingsIntoControls(AgentSettings.Default, keepAutoStart: true);
         _settingsStatus.AutoSize = true;
         _settingsStatus.Margin = new Padding(12, 7, 0, 0);
@@ -247,7 +281,7 @@ internal sealed class ManagementForm : Form
         };
         actions.Controls.AddRange(new Control[] { save, reset, _settingsStatus });
 
-        panel.Controls.AddRange(new Control[] { note, promptGroup, noticeGroup, startupGroup });
+        panel.Controls.AddRange(new Control[] { note, languageGroup, promptGroup, noticeGroup, startupGroup });
         page.Controls.Add(panel);
         page.Controls.Add(actions);
         return page;
@@ -255,15 +289,15 @@ internal sealed class ManagementForm : Form
 
     private TabPage BuildActivityTab()
     {
-        var page = new TabPage("活動紀錄") { Padding = new Padding(12) };
+        var page = new TabPage(Loc.T("tab.activity")) { Padding = new Padding(12) };
 
         _logSource.DropDownStyle = ComboBoxStyle.DropDownList;
-        _logSource.Items.AddRange(new object[] { "管理操作（稽核紀錄）", "被攔截的事件" });
+        _logSource.Items.AddRange(new object[] { Loc.T("log.source.audit"), Loc.T("log.source.events") });
         _logSource.SelectedIndex = 0;
-        _logSource.Width = 280;
+        _logSource.Width = 320;
         _logSource.SelectedIndexChanged += (_, _) => RefreshLog();
 
-        var refresh = new Button { Text = "重新整理", AutoSize = true };
+        var refresh = new Button { Text = Loc.T("btn.refresh"), AutoSize = true };
         refresh.Click += (_, _) => RefreshLog();
 
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36, FlowDirection = FlowDirection.LeftToRight };
@@ -321,10 +355,47 @@ internal sealed class ManagementForm : Form
     private static Control Row(string label, NumericUpDown input, string unit)
     {
         var row = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-        row.Controls.Add(new Label { Text = label, AutoSize = false, Width = 340, Height = 26, TextAlign = ContentAlignment.MiddleLeft });
+        row.Controls.Add(RowLabel(label));
         row.Controls.Add(input);
         row.Controls.Add(new Label { Text = unit, AutoSize = true, Margin = new Padding(4, 6, 0, 0) });
         return row;
+    }
+
+    /// <summary>Label column of a settings row: fixed minimum width, wraps instead of truncating long translations.</summary>
+    private static Label RowLabel(string text) => new()
+    {
+        Text = text,
+        AutoSize = true,
+        MinimumSize = new Size(380, 0),
+        MaximumSize = new Size(380, 0),
+        Margin = new Padding(3, 6, 3, 6),
+        UseCompatibleTextRendering = true
+    };
+
+    /// <summary>
+    /// WinForms CheckBox does not wrap reliably when auto-sized, so measure the translated text and
+    /// give the box a fixed width with exactly the height the wrapped text needs.
+    /// </summary>
+    private void ConfigureCheck(CheckBox box, string text)
+    {
+        const int glyphAndPadding = 28;
+        var width = ContentWidth - 40;
+        var measured = TextRenderer.MeasureText(
+            text,
+            Font,
+            new Size(width - glyphAndPadding, int.MaxValue),
+            TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+
+        box.Text = text;
+        box.AutoSize = false;
+        box.UseCompatibleTextRendering = true;
+        box.Size = new Size(width, Math.Max(24, measured.Height + 8));
+        box.Margin = new Padding(3, 3, 3, 6);
+    }
+
+    private sealed record LanguageItem(string Code, string Display)
+    {
+        public override string ToString() => Display;
     }
 
     // ------------------------------------------------------------- protection
@@ -332,8 +403,8 @@ internal sealed class ManagementForm : Form
     private void RefreshAll()
     {
         _brokerStatus.Text = _broker.Exists
-            ? "Broker：已找到　|　保護層：NTFS ACL"
-            : $"找不到 DeleteGuard.Broker.exe（{_broker.BrokerPath}）　—　無法新增或移除保護";
+            ? Loc.T("status.brokerFound")
+            : Loc.T("status.brokerMissing", _broker.BrokerPath);
         _brokerStatus.ForeColor = _broker.Exists ? SystemColors.ControlText : Color.Firebrick;
 
         RefreshProtectionList();
@@ -355,12 +426,12 @@ internal sealed class ManagementForm : Form
             }
             catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException)
             {
-                _emptyHint.Text = $"無法讀取保護清單：{exception.Message}";
+                _emptyHint.Text = Loc.T("list.loadError", exception.Message);
                 _emptyHint.Visible = true;
                 return;
             }
 
-            _emptyHint.Text = "尚未保護任何資料夾。按「新增資料夾…」開始。";
+            _emptyHint.Text = Loc.T("list.empty");
             _emptyHint.Visible = entries.Count == 0;
 
             foreach (var entry in entries)
@@ -388,15 +459,15 @@ internal sealed class ManagementForm : Form
     {
         if (!entry.Enabled)
         {
-            return "已停用";
+            return Loc.T("state.disabled");
         }
 
         return entry.Acl switch
         {
-            AclState.Present => "保護中",
-            AclState.Missing => "ACL 遺失（保護可能失效）",
-            AclState.FolderMissing => "資料夾不存在",
-            _ => "狀態未知"
+            AclState.Present => Loc.T("state.protected"),
+            AclState.Missing => Loc.T("state.aclMissing"),
+            AclState.FolderMissing => Loc.T("state.folderMissing"),
+            _ => Loc.T("state.unknown")
         };
     }
 
@@ -419,7 +490,7 @@ internal sealed class ManagementForm : Form
 
         using var dialog = new FolderBrowserDialog
         {
-            Description = "選擇要保護的資料夾",
+            Description = Loc.T("add.dialogDescription"),
             UseDescriptionForTitle = true,
             ShowNewFolderButton = false
         };
@@ -431,20 +502,17 @@ internal sealed class ManagementForm : Form
         var check = _validator.Validate(dialog.SelectedPath);
         if (!check.Accepted)
         {
-            MessageBox.Show(this, DescribeRejection(check), "無法保護此資料夾", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, DescribeRejection(check), Loc.T("add.errorTitle"), MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
         var warning = check.IsVolumeRoot
-            ? $"您選擇的是整個磁碟區：\n{check.Path}\n\n保護整個磁碟區會影響該磁碟上所有程式的刪除、重新命名與覆寫儲存，請確定這是您要的。\n\n"
-            : $"將保護：\n{check.Path}\n\n";
+            ? Loc.T("add.confirmVolume", check.Path)
+            : Loc.T("add.confirmFolder", check.Path);
         var confirm = MessageBox.Show(
             this,
-            warning +
-            "• 此資料夾內的檔案無法被一般程式刪除（會顯示「存取被拒」）\n" +
-            "• 也可能阻擋資料夾內的重新命名、移動，以及部分程式的覆寫儲存\n" +
-            "• 需要系統管理員核准（UAC）\n\n繼續？",
-            "確認新增保護",
+            warning + Loc.T("add.confirmBody"),
+            Loc.T("add.confirmTitle"),
             MessageBoxButtons.YesNo,
             check.IsVolumeRoot ? MessageBoxIcon.Warning : MessageBoxIcon.Question,
             MessageBoxDefaultButton.Button2);
@@ -453,7 +521,10 @@ internal sealed class ManagementForm : Form
             return;
         }
 
-        await RunBrokerAsync(() => _broker.ProtectAsync(check.Path, check.IsVolumeRoot), $"已保護：{check.Path}", "新增保護");
+        await RunBrokerAsync(
+            () => _broker.ProtectAsync(check.Path, check.IsVolumeRoot),
+            Loc.T("add.success", check.Path),
+            Loc.T("add.title"));
     }
 
     private async void RemoveSelected()
@@ -466,8 +537,8 @@ internal sealed class ManagementForm : Form
 
         var confirm = MessageBox.Show(
             this,
-            $"將解除保護：\n{entry.RootPath}\n\n解除後，此資料夾內的檔案可以被一般方式刪除。需要系統管理員核准（UAC）。\n\n繼續？",
-            "確認移除保護",
+            Loc.T("remove.confirm", entry.RootPath),
+            Loc.T("remove.confirmTitle"),
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
             MessageBoxDefaultButton.Button2);
@@ -476,14 +547,17 @@ internal sealed class ManagementForm : Form
             return;
         }
 
-        await RunBrokerAsync(() => _broker.UnprotectAsync(entry.RootPath), $"已解除保護：{entry.RootPath}", "移除保護");
+        await RunBrokerAsync(
+            () => _broker.UnprotectAsync(entry.RootPath),
+            Loc.T("remove.success", entry.RootPath),
+            Loc.T("remove.title"));
     }
 
     private async Task RunBrokerAsync(Func<Task<BrokerResult>> action, string successText, string title)
     {
         _busy = true;
         UpdateButtons();
-        _busyLabel.Text = "等待 UAC 核准並執行中…";
+        _busyLabel.Text = Loc.T("busy.waiting");
 
         try
         {
@@ -494,7 +568,7 @@ internal sealed class ManagementForm : Form
             }
             else if (result.Failure == BrokerFailure.Cancelled)
             {
-                _busyLabel.Text = "已取消（未通過 UAC 核准），沒有任何變更。";
+                _busyLabel.Text = Loc.T("busy.cancelled");
             }
             else
             {
@@ -509,30 +583,30 @@ internal sealed class ManagementForm : Form
         }
     }
 
-    private static string DescribeRejection(ProtectionCheck check) => check.Rejection switch
+    internal static string DescribeRejection(ProtectionCheck check) => check.Rejection switch
     {
-        ProtectionRejection.Empty => "請選擇一個資料夾。",
-        ProtectionRejection.InvalidPath => "路徑格式不正確。",
-        ProtectionRejection.NetworkPath => "不支援網路路徑（UNC）。請選擇本機 NTFS 磁碟上的資料夾。",
-        ProtectionRejection.NotFound => $"資料夾不存在：\n{check.Path}",
-        ProtectionRejection.NotADirectory => "只能保護資料夾，不能保護單一檔案。",
-        ProtectionRejection.ReparsePoint => "此資料夾是連結點／符號連結（reparse point），目前不支援。請選擇連結指向的實際資料夾。",
-        ProtectionRejection.NotNtfs => $"只支援 NTFS 磁碟。\n\n{check.Detail}",
-        ProtectionRejection.SystemVolumeRoot => "不允許保護 Windows 系統磁碟的根目錄。請改選其中的特定資料夾。",
-        ProtectionRejection.AlreadyProtected => $"此資料夾已受保護：\n{check.Path}",
-        ProtectionRejection.Overlaps => $"與既有的保護範圍重疊：\n{check.Detail}\n\n目前不支援巢狀的保護範圍。請先移除既有保護，或改選其他資料夾。",
-        _ => "無法保護此資料夾。"
+        ProtectionRejection.Empty => Loc.T("reject.empty"),
+        ProtectionRejection.InvalidPath => Loc.T("reject.invalidPath"),
+        ProtectionRejection.NetworkPath => Loc.T("reject.networkPath"),
+        ProtectionRejection.NotFound => Loc.T("reject.notFound", check.Path),
+        ProtectionRejection.NotADirectory => Loc.T("reject.notADirectory"),
+        ProtectionRejection.ReparsePoint => Loc.T("reject.reparsePoint"),
+        ProtectionRejection.NotNtfs => Loc.T("reject.notNtfs", check.Detail ?? string.Empty),
+        ProtectionRejection.SystemVolumeRoot => Loc.T("reject.systemVolumeRoot"),
+        ProtectionRejection.AlreadyProtected => Loc.T("reject.alreadyProtected", check.Path),
+        ProtectionRejection.Overlaps => Loc.T("reject.overlaps", check.Detail ?? string.Empty),
+        _ => Loc.T("reject.generic")
     };
 
-    private static string DescribeFailure(BrokerResult result)
+    internal static string DescribeFailure(BrokerResult result)
     {
         var text = result.Failure switch
         {
-            BrokerFailure.BrokerMissing => "找不到 DeleteGuard.Broker.exe。",
-            BrokerFailure.StartFailed => "無法啟動 DeleteGuard Broker。",
-            BrokerFailure.NotElevated => "Broker 沒有取得系統管理員權限。",
-            BrokerFailure.Busy => "另一個 DeleteGuard 管理操作正在進行，請稍後再試。",
-            _ => $"操作失敗（代碼 {result.ExitCode}）。"
+            BrokerFailure.BrokerMissing => Loc.T("failure.brokerMissing"),
+            BrokerFailure.StartFailed => Loc.T("failure.startFailed"),
+            BrokerFailure.NotElevated => Loc.T("failure.notElevated"),
+            BrokerFailure.Busy => Loc.T("failure.busy"),
+            _ => Loc.T("failure.failed", result.ExitCode)
         };
 
         return string.IsNullOrWhiteSpace(result.Detail) ? text : $"{text}\n\n{result.Detail}";
@@ -549,6 +623,7 @@ internal sealed class ManagementForm : Form
         _namespaceNotices.Checked = settings.ShowNamespaceNotices;
         _throttleNotices.Checked = settings.ShowThrottleNotices;
         _noticeCooldown.Value = settings.NoticeCooldownSeconds;
+        SelectLanguage(settings.Language);
         if (!keepAutoStart)
         {
             _autoStart.Checked = AutoStart.IsEnabled();
@@ -556,6 +631,20 @@ internal sealed class ManagementForm : Form
 
         UpdateSettingsEnabled();
         _settingsStatus.Text = string.Empty;
+    }
+
+    private void SelectLanguage(string code)
+    {
+        foreach (LanguageItem item in _language.Items)
+        {
+            if (string.Equals(item.Code, code, StringComparison.OrdinalIgnoreCase))
+            {
+                _language.SelectedItem = item;
+                return;
+            }
+        }
+
+        _language.SelectedIndex = 0;
     }
 
     private void UpdateSettingsEnabled()
@@ -569,6 +658,7 @@ internal sealed class ManagementForm : Form
     {
         try
         {
+            var language = (_language.SelectedItem as LanguageItem)?.Code ?? Loc.Auto;
             var saved = _settingsStore.Save(new AgentSettings
             {
                 ShowApprovalPrompts = _showPrompts.Checked,
@@ -577,7 +667,8 @@ internal sealed class ManagementForm : Form
                 PromptMaxAgeSeconds = (int)_promptMaxAge.Value,
                 ShowNamespaceNotices = _namespaceNotices.Checked,
                 ShowThrottleNotices = _throttleNotices.Checked,
-                NoticeCooldownSeconds = (int)_noticeCooldown.Value
+                NoticeCooldownSeconds = (int)_noticeCooldown.Value,
+                Language = language
             });
 
             if (_autoStart.Checked != AutoStart.IsEnabled())
@@ -585,15 +676,17 @@ internal sealed class ManagementForm : Form
                 AutoStart.Set(_autoStart.Checked);
             }
 
-            _settingsApplied(saved);
             _settingsStatus.ForeColor = SystemColors.ControlText;
-            _settingsStatus.Text = $"已儲存並立即生效（{DateTime.Now:HH:mm:ss}）";
+            _settingsStatus.Text = Loc.T("settings.saved", DateTime.Now.ToString("HH:mm:ss"));
+
+            // May rebuild (and dispose) this window when the language changed, so it must be the last step.
+            _settingsApplied(saved);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             _settingsStatus.ForeColor = Color.Firebrick;
-            _settingsStatus.Text = "儲存失敗";
-            MessageBox.Show(this, $"無法儲存設定：\n{exception.Message}", "DeleteGuard", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _settingsStatus.Text = Loc.T("settings.saveFailed");
+            MessageBox.Show(this, Loc.T("settings.saveError", exception.Message), "DeleteGuard", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
@@ -609,11 +702,11 @@ internal sealed class ManagementForm : Form
 
             if (_logSource.SelectedIndex == 0)
             {
-                _logList.Columns.Add("時間", 140);
-                _logList.Columns.Add("動作", 80);
-                _logList.Columns.Add("結果", 80);
-                _logList.Columns.Add("路徑", 300);
-                _logList.Columns.Add("說明", 200);
+                _logList.Columns.Add(Loc.T("col.time"), 140);
+                _logList.Columns.Add(Loc.T("col.action"), 80);
+                _logList.Columns.Add(Loc.T("col.result"), 80);
+                _logList.Columns.Add(Loc.T("col.path"), 300);
+                _logList.Columns.Add(Loc.T("col.detail"), 200);
                 foreach (var line in ReadSafely(() => _audit.ReadLast(200)).Reverse())
                 {
                     AuditEntry? entry;
@@ -646,10 +739,10 @@ internal sealed class ManagementForm : Form
             }
             else
             {
-                _logList.Columns.Add("時間", 140);
-                _logList.Columns.Add("程序", 150);
-                _logList.Columns.Add("操作", 190);
-                _logList.Columns.Add("路徑", 320);
+                _logList.Columns.Add(Loc.T("col.time"), 140);
+                _logList.Columns.Add(Loc.T("col.process"), 150);
+                _logList.Columns.Add(Loc.T("col.operation"), 190);
+                _logList.Columns.Add(Loc.T("col.path"), 320);
                 foreach (var record in ReadSafely(() => _events.ReadLast(200)).Reverse())
                 {
                     var item = new ListViewItem(record.ObservedUtc.ToLocalTime().ToString("MM-dd HH:mm:ss"));
