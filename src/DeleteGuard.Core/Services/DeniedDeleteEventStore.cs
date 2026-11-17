@@ -9,10 +9,18 @@ public sealed class DeniedDeleteEventStore
     public const long MaxEventFileBytes = 4 * 1024 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly object _writeLock = new();
+    private readonly bool _secureDirectory;
 
-    public DeniedDeleteEventStore(string? dataDirectory = null)
+    /// <param name="dataDirectory">Event directory. Defaults to the ProgramData location.</param>
+    /// <param name="secureDirectory">
+    /// Apply the administrator/SYSTEM-owned ACL when the directory has to be created.
+    /// Defaults to true only for the default ProgramData directory, so tests and tools
+    /// using a private directory do not need elevation.
+    /// </param>
+    public DeniedDeleteEventStore(string? dataDirectory = null, bool? secureDirectory = null)
     {
         var directory = dataDirectory ?? RuntimePaths.DefaultDataDirectory;
+        _secureDirectory = secureDirectory ?? dataDirectory is null;
         EventFile = Path.Combine(directory, "denied-events.jsonl");
         RotatedEventFile = Path.Combine(directory, "denied-events.1.jsonl");
     }
@@ -28,7 +36,14 @@ public sealed class DeniedDeleteEventStore
 
         if (!Directory.Exists(directory))
         {
-            RuntimePaths.EnsureSecureDataDirectory(directory);
+            if (_secureDirectory)
+            {
+                RuntimePaths.EnsureSecureDataDirectory(directory);
+            }
+            else
+            {
+                Directory.CreateDirectory(directory);
+            }
         }
 
         var line = JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine;
