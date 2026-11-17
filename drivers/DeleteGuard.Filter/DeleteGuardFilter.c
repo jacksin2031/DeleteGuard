@@ -347,13 +347,19 @@ static BOOLEAN DgSetInfoRequestsDelete(_In_ PFLT_CALLBACK_DATA Data)
 static BOOLEAN DgSetInfoRequestsRename(_In_ PFLT_CALLBACK_DATA Data)
 {
     FILE_INFORMATION_CLASS infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
-    return infoClass == FileRenameInformation || infoClass == FileRenameInformationEx;
+    return infoClass == FileRenameInformation ||
+        infoClass == FileRenameInformationEx ||
+        infoClass == FileRenameInformationBypassAccessCheck ||
+        infoClass == FileRenameInformationExBypassAccessCheck;
 }
 
 static BOOLEAN DgSetInfoRequestsLink(_In_ PFLT_CALLBACK_DATA Data)
 {
     FILE_INFORMATION_CLASS infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
-    return infoClass == FileLinkInformation || infoClass == FileLinkInformationEx;
+    return infoClass == FileLinkInformation ||
+        infoClass == FileLinkInformationEx ||
+        infoClass == FileLinkInformationBypassAccessCheck ||
+        infoClass == FileLinkInformationExBypassAccessCheck;
 }
 
 static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
@@ -503,7 +509,7 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceRename(
     __try {
         rootDirectory = renameInfo->RootDirectory;
         destinationNameLength = renameInfo->FileNameLength;
-        replaceIfExists = infoClass == FileRenameInformation
+        replaceIfExists = (infoClass == FileRenameInformation || infoClass == FileRenameInformationBypassAccessCheck)
             ? (renameInfo->ReplaceIfExists ? TRUE : FALSE)
             : (FlagOn(renameInfo->Flags, FILE_RENAME_REPLACE_IF_EXISTS) ? TRUE : FALSE);
 
@@ -695,7 +701,7 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceLink(
     __try {
         rootDirectory = linkInfo->RootDirectory;
         destinationNameLength = linkInfo->FileNameLength;
-        replaceIfExists = infoClass == FileLinkInformation
+        replaceIfExists = (infoClass == FileLinkInformation || infoClass == FileLinkInformationBypassAccessCheck)
             ? (linkInfo->ReplaceIfExists ? TRUE : FALSE)
             : (FlagOn(linkInfo->Flags, FILE_LINK_REPLACE_IF_EXISTS) ? TRUE : FALSE);
 
