@@ -34,6 +34,14 @@ jobs:
             $allErrors | Write-Error
             exit 1
           }
+      - name: Compile test-VM native probes (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          Add-Type -Path .\scripts\testvm\HardLinkProbe.cs
+          if (-not ('DeleteGuardHardLinkProbe' -as [type])) {
+            Write-Error 'HardLinkProbe.cs did not produce DeleteGuardHardLinkProbe.'
+            exit 1
+          }
       - name: Smoke test test-VM destructive path boundary
         shell: powershell
         run: |
