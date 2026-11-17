@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, feature/mvp]
+    branches: [main, feature/mvp, feature/minifilter-v0.2, feature/interactive-approval-v0.2.1, feature/runtime-validation-v0.2.2]
   pull_request:
 
 permissions:
@@ -16,6 +16,49 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+      - name: Validate test-VM PowerShell syntax (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $allErrors = @()
+          Get-ChildItem -Path scripts\testvm -Filter *.ps1 -File | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors) {
+              foreach ($parseError in $parseErrors) {
+                $allErrors += "$($_.Name): $($parseError.Message) at $($parseError.Extent.StartLineNumber):$($parseError.Extent.StartColumnNumber)"
+              }
+            }
+          }
+          if ($allErrors.Count -gt 0) {
+            $allErrors | Write-Error
+            exit 1
+          }
+      - name: Compile test-VM native probes (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          Add-Type -Path .\scripts\testvm\HardLinkProbe.cs
+          if (-not ('DeleteGuardHardLinkProbe' -as [type])) {
+            Write-Error 'HardLinkProbe.cs did not produce DeleteGuardHardLinkProbe.'
+            exit 1
+          }
+      - name: Smoke test test-VM destructive path boundary
+        shell: powershell
+        run: |
+          . .\scripts\testvm\TestVm.Common.ps1
+          Assert-DeleteGuardSafeTestPath -Path 'C:\DeleteGuard-VMTest'
+          Assert-DeleteGuardSafeTestPath -Path 'C:\DeleteGuard-VMTest\safe-child\file.txt'
+          $outsideWasRejected = $false
+          try {
+            Assert-DeleteGuardSafeTestPath -Path 'C:\Windows'
+          }
+          catch {
+            $outsideWasRejected = $true
+          }
+          if (-not $outsideWasRejected) {
+            Write-Error 'Safety boundary accepted C:\Windows unexpectedly.'
+            exit 1
+          }
       - name: Restore
         run: dotnet restore DeleteGuard.sln
       - name: Build
@@ -30,4 +73,19 @@ jobs:
         with:
           name: DeleteGuard-win-x64
           path: artifacts/win-x64/
+          if-no-files-found: error
+
+  build-minifilter:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: NuGet/setup-nuget@v2
+      - name: Build unsigned x64 minifilter
+        shell: pwsh
+        run: ./scripts/build-driver.ps1 -Configuration Release
+      - name: Upload unsigned driver package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeleteGuard-minifilter-x64-unsigned
+          path: artifacts/driver-x64/
           if-no-files-found: error
