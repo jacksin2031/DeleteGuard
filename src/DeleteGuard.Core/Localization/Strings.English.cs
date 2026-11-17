@@ -130,6 +130,25 @@ internal static partial class Strings
         ["cli.help.title"] = "DeleteGuard v0.2 - administrator-gated deletion protection for NTFS paths",
         ["cli.help.note1"] = "Ordinary Explorer/cmd/PowerShell/app deletion attempts are denied by the ACL fallback",
         ["cli.help.note2"] = "and, when installed/running, by the DeleteGuard filesystem minifilter.",
-        ["cli.help.note3"] = "Use 'deleteguard delete' to request a UAC-approved scoped deletion grant."
+        ["cli.help.note3"] = "Use 'deleteguard delete' to request a UAC-approved scoped deletion grant.",
+
+        ["list.col.mode"] = "Protection",
+        ["mode.full"] = "Full protection",
+        ["mode.bulk"] = "Bulk-delete guard ({0} deletions / {1} s)",
+        ["state.bulk"] = "Active in the driver only",
+        ["add.mode.title"] = "Choose the protection type",
+        ["add.mode.full.title"] = "Full protection",
+        ["add.mode.full.desc"] = "Nothing inside can be deleted by ordinary programs. Uses NTFS permissions plus the driver, so it also works when the driver is not loaded. Renames, moves and some programs' overwrite-saves inside the folder may be blocked.",
+        ["add.mode.bulk.title"] = "Bulk-delete guard",
+        ["add.mode.bulk.desc"] = "Everyday work is unaffected: single files can still be deleted, renamed and edited. If more than the limit below are deleted within the time window, further deletions are blocked until deleting stops for a while. This stops a mistaken or runaway command from wiping the folder. It is enforced only by the DeleteGuard driver; if the driver is not loaded, this folder is NOT protected.",
+        ["add.mode.threshold"] = "Block after more than",
+        ["add.mode.window"] = "deletions within",
+        ["btn.ok"] = "OK",
+        ["btn.cancel"] = "Cancel",
+        ["add.confirmBulk"] = "• Single files can still be deleted normally\n• More than {0} deletions within {1} seconds are blocked until deleting stops for a while\n• Works only while the DeleteGuard driver is loaded; otherwise this folder is NOT protected\n• To delete a lot on purpose, use the Broker (deleteguard delete <folder>)\n• Administrator approval (UAC) is required\n\nContinue?",
+        ["failure.driverUnavailable"] = "The DeleteGuard driver is not loaded (or is an incompatible version), so the bulk-delete guard cannot be enabled. Nothing was changed.",
+        ["notice.bulk.title"] = "DeleteGuard blocked a bulk deletion",
+        ["notice.bulk.body"] = "Too many files were deleted too quickly in:\n{0}\n\nFurther deletions in this folder are blocked until deleting stops for a while. If this is intentional, use 'deleteguard delete <folder>' (or the management window) and approve it with UAC.",
+        ["cli.help.bulk"] = "Add --bulk-guard [--threshold N] [--window SECONDS] to protect to allow normal deletes but block bulk deletion (needs the driver)."
     };
 }

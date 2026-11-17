@@ -130,6 +130,25 @@ internal static partial class Strings
         ["cli.help.title"] = "DeleteGuard v0.2 - NTFS 경로에 대한 관리자 승인 기반 삭제 보호",
         ["cli.help.note1"] = "탐색기/cmd/PowerShell/앱의 일반적인 삭제 시도는 ACL 대체 수단에 의해 거부되며,",
         ["cli.help.note2"] = "DeleteGuard 파일 시스템 minifilter가 설치되어 실행 중이면 그것에 의해서도 거부됩니다.",
-        ["cli.help.note3"] = "UAC로 승인된 범위 제한 삭제 권한을 요청하려면 'deleteguard delete'를 사용하세요."
+        ["cli.help.note3"] = "UAC로 승인된 범위 제한 삭제 권한을 요청하려면 'deleteguard delete'를 사용하세요.",
+
+        ["list.col.mode"] = "보호 방식",
+        ["mode.full"] = "전체 보호",
+        ["mode.bulk"] = "대량 삭제 방지({1}초 내 {0}회 삭제)",
+        ["state.bulk"] = "드라이버로만 동작",
+        ["add.mode.title"] = "보호 유형 선택",
+        ["add.mode.full.title"] = "전체 보호",
+        ["add.mode.full.desc"] = "폴더 안의 모든 내용을 일반 프로그램에서 삭제할 수 없습니다. NTFS 권한과 드라이버를 함께 사용하므로 드라이버가 로드되지 않아도 동작합니다. 폴더 내의 이름 바꾸기, 이동, 일부 프로그램의 덮어쓰기 저장이 차단될 수 있습니다.",
+        ["add.mode.bulk.title"] = "대량 삭제 방지",
+        ["add.mode.bulk.desc"] = "일상적인 작업에는 영향이 없습니다. 개별 파일은 평소처럼 삭제, 이름 바꾸기, 편집할 수 있습니다. 시간 창 안에 아래 한도를 넘게 삭제하면 삭제가 한동안 멈출 때까지 이후 삭제가 차단됩니다. 잘못되었거나 폭주한 명령이 폴더를 비우는 것을 막아 줍니다. 이 방식은 DeleteGuard 드라이버로만 적용되며, 드라이버가 로드되지 않으면 이 폴더는 보호되지 않습니다.",
+        ["add.mode.threshold"] = "다음 개수를 넘으면 차단",
+        ["add.mode.window"] = "개 삭제(기간:",
+        ["btn.ok"] = "확인",
+        ["btn.cancel"] = "취소",
+        ["add.confirmBulk"] = "• 개별 파일은 평소처럼 삭제할 수 있습니다\n• {1}초 안에 {0}개를 넘게 삭제하면 삭제가 한동안 멈출 때까지 차단됩니다\n• DeleteGuard 드라이버가 로드되어 있을 때만 동작하며, 그렇지 않으면 이 폴더는 보호되지 않습니다\n• 의도적으로 많이 삭제하려면 Broker(deleteguard delete <폴더>)를 사용하세요\n• 관리자 승인(UAC)이 필요합니다\n\n계속하시겠습니까?",
+        ["failure.driverUnavailable"] = "DeleteGuard 드라이버가 로드되지 않았거나 호환되지 않는 버전이므로 대량 삭제 방지를 사용할 수 없습니다. 변경된 내용이 없습니다.",
+        ["notice.bulk.title"] = "DeleteGuard가 대량 삭제를 차단했습니다",
+        ["notice.bulk.body"] = "다음 폴더에서 짧은 시간에 너무 많은 파일이 삭제되었습니다:\n{0}\n\n이 폴더의 이후 삭제는 삭제가 한동안 멈출 때까지 차단됩니다. 의도한 작업이라면 'deleteguard delete <폴더>'(또는 관리 창)를 사용하고 UAC로 승인하세요.",
+        ["cli.help.bulk"] = "protect에 --bulk-guard [--threshold N] [--window 초]를 추가하면 일반 삭제는 허용하고 대량 삭제만 차단합니다(드라이버 필요)."
     };
 }

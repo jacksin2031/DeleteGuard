@@ -130,6 +130,25 @@ internal static partial class Strings
         ["cli.help.title"] = "DeleteGuard v0.2 - Löschschutz mit Administratorgenehmigung für NTFS-Pfade",
         ["cli.help.note1"] = "Normale Löschversuche über Explorer/cmd/PowerShell/Apps werden durch die ACL-Ersatzebene verweigert",
         ["cli.help.note2"] = "und, sofern installiert und aktiv, durch den DeleteGuard-Dateisystem-Minifilter.",
-        ["cli.help.note3"] = "Verwenden Sie 'deleteguard delete', um eine per UAC genehmigte, begrenzte Löschberechtigung anzufordern."
+        ["cli.help.note3"] = "Verwenden Sie 'deleteguard delete', um eine per UAC genehmigte, begrenzte Löschberechtigung anzufordern.",
+
+        ["list.col.mode"] = "Schutz",
+        ["mode.full"] = "Vollständiger Schutz",
+        ["mode.bulk"] = "Massenlösch-Schutz ({0} Löschungen / {1} s)",
+        ["state.bulk"] = "Nur im Treiber aktiv",
+        ["add.mode.title"] = "Schutzart wählen",
+        ["add.mode.full.title"] = "Vollständiger Schutz",
+        ["add.mode.full.desc"] = "Nichts darin kann von normalen Programmen gelöscht werden. Verwendet NTFS-Berechtigungen plus den Treiber und funktioniert daher auch, wenn der Treiber nicht geladen ist. Umbenennen, Verschieben und das Überschreiben beim Speichern einiger Programme im Ordner kann blockiert werden.",
+        ["add.mode.bulk.title"] = "Massenlösch-Schutz",
+        ["add.mode.bulk.desc"] = "Die tägliche Arbeit bleibt unberührt: Einzelne Dateien lassen sich weiterhin löschen, umbenennen und bearbeiten. Werden im Zeitfenster mehr als die unten angegebene Anzahl gelöscht, werden weitere Löschvorgänge blockiert, bis eine Weile nicht mehr gelöscht wird. So wird verhindert, dass ein falscher oder außer Kontrolle geratener Befehl den Ordner leert. Dies wird nur vom DeleteGuard-Treiber durchgesetzt; ist der Treiber nicht geladen, ist dieser Ordner NICHT geschützt.",
+        ["add.mode.threshold"] = "Blockieren nach mehr als",
+        ["add.mode.window"] = "Löschungen innerhalb von",
+        ["btn.ok"] = "OK",
+        ["btn.cancel"] = "Abbrechen",
+        ["add.confirmBulk"] = "• Einzelne Dateien können weiterhin normal gelöscht werden\n• Mehr als {0} Löschungen innerhalb von {1} Sekunden werden blockiert, bis eine Weile nicht mehr gelöscht wird\n• Funktioniert nur, solange der DeleteGuard-Treiber geladen ist; andernfalls ist dieser Ordner NICHT geschützt\n• Um absichtlich viel zu löschen, verwenden Sie den Broker (deleteguard delete <Ordner>)\n• Die Genehmigung eines Administrators (UAC) ist erforderlich\n\nFortfahren?",
+        ["failure.driverUnavailable"] = "Der DeleteGuard-Treiber ist nicht geladen (oder hat eine inkompatible Version), daher kann der Massenlösch-Schutz nicht aktiviert werden. Es wurde nichts geändert.",
+        ["notice.bulk.title"] = "DeleteGuard hat ein Massenlöschen blockiert",
+        ["notice.bulk.body"] = "In folgendem Ordner wurden zu viele Dateien zu schnell gelöscht:\n{0}\n\nWeitere Löschvorgänge in diesem Ordner werden blockiert, bis eine Weile nicht mehr gelöscht wird. Wenn dies beabsichtigt ist, verwenden Sie 'deleteguard delete <Ordner>' (oder das Verwaltungsfenster) und genehmigen Sie es per UAC.",
+        ["cli.help.bulk"] = "Fügen Sie protect --bulk-guard [--threshold N] [--window SEKUNDEN] hinzu, um normales Löschen zu erlauben, Massenlöschen aber zu blockieren (erfordert den Treiber)."
     };
 }

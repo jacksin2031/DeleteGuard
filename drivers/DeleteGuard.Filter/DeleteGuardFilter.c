@@ -90,13 +90,24 @@ static BOOLEAN DgPathIsSameOrDescendant(
 static BOOLEAN DgIsProtectedPath(_In_ PCUNICODE_STRING Name);
 static BOOLEAN DgPathContainsProtectedRoot(_In_ PCUNICODE_STRING Name);
 static BOOLEAN DgHasProtectedRoots(VOID);
-static BOOLEAN DgIsProtectedAndGranted(
+
+typedef enum _DG_DELETE_DECISION {
+    DgDecisionNotProtected = 0,
+    DgDecisionAllow,
+    DgDecisionDenyFull,
+    DgDecisionDenyBulk
+} DG_DELETE_DECISION;
+
+static DG_DELETE_DECISION DgDecideDelete(
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG ProcessId,
     _In_ ULONGLONG ProcessStartKey,
-    _Out_ PBOOLEAN Granted);
+    _Out_writes_(DG_MAX_PATH_CHARS + 1) PWCHAR RootPathCopy,
+    _Out_ PUSHORT RootPathChars,
+    _Out_ PBOOLEAN Notify);
 static NTSTATUS DgReadCommandPath(_In_ const DG_COMMAND *Command, _Out_ PUSHORT LengthChars);
-static NTSTATUS DgAddRoot(_In_ const DG_COMMAND *Command);
+static NTSTATUS DgAddRoot(_In_ const DG_COMMAND *Command, _In_ ULONG Mode);
+static ULONG DgFullRootCountLocked(VOID);
 static NTSTATUS DgRemoveRoot(_In_ const DG_COMMAND *Command);
 static NTSTATUS DgGrant(_In_ const DG_COMMAND *Command);
 static NTSTATUS DgRevoke(_In_ const DG_COMMAND *Command);
@@ -369,8 +380,10 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
     NTSTATUS status;
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
     PEPROCESS requestorProcess;
-    BOOLEAN granted = FALSE;
-    BOOLEAN isProtected;
+    DG_DELETE_DECISION decision;
+    WCHAR rootPathCopy[DG_MAX_PATH_CHARS + 1];
+    USHORT rootPathChars = 0;
+    BOOLEAN notify = FALSE;
     ULONG processId;
     ULONGLONG processStartKey = 0;
 
@@ -396,17 +409,33 @@ static FLT_PREOP_CALLBACK_STATUS DgEnforceDelete(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    isProtected = DgIsProtectedAndGranted(
+    decision = DgDecideDelete(
         &nameInfo->Name,
         processId,
         processStartKey,
-        &granted);
-    if (!isProtected || granted) {
+        rootPathCopy,
+        &rootPathChars,
+        &notify);
+    if (decision == DgDecisionNotProtected || decision == DgDecisionAllow) {
         FltReleaseFileNameInformation(nameInfo);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    DgPublishDeniedEvent(&nameInfo->Name, processId, DgEventDeleteDenied, Operation);
+    if (decision == DgDecisionDenyBulk) {
+        /* Report the protected folder (not each file) and only when the limiter says so, so a wipe
+           attempting millions of deletes cannot flood the event channel. */
+        if (notify) {
+            UNICODE_STRING rootName;
+            rootName.Buffer = rootPathCopy;
+            rootName.Length = (USHORT)(rootPathChars * sizeof(WCHAR));
+            rootName.MaximumLength = rootName.Length;
+            DgPublishDeniedEvent(&rootName, processId, DgEventDeleteDenied, DgDeleteOperationBulkDelete);
+        }
+    }
+    else {
+        DgPublishDeniedEvent(&nameInfo->Name, processId, DgEventDeleteDenied, Operation);
+    }
+
     FltReleaseFileNameInformation(nameInfo);
 
     Data->IoStatus.Status = STATUS_ACCESS_DENIED;
@@ -916,8 +945,11 @@ static BOOLEAN DgIsProtectedPath(_In_ PCUNICODE_STRING Name)
     KeEnterCriticalRegion();
     ExAcquirePushLockShared(&gStateLock);
 
+    /* Bulk-guard roots deliberately do not take part in the rename/link gates: normal renames and
+       moves in such a folder must keep working. */
     for (index = 0; index < DG_MAX_ROOTS; ++index) {
         if (gRoots[index].Length != 0 &&
+            gRoots[index].Mode == DG_ROOT_MODE_FULL &&
             DgPathIsSameOrDescendant(Name, gRoots[index].Path, gRoots[index].Length)) {
             isProtected = TRUE;
             break;
@@ -972,23 +1004,29 @@ static BOOLEAN DgHasProtectedRoots(VOID)
 
     KeEnterCriticalRegion();
     ExAcquirePushLockShared(&gStateLock);
-    hasRoots = DgRootCountLocked() != 0;
+    hasRoots = DgFullRootCountLocked() != 0;
     ExReleasePushLockShared(&gStateLock);
     KeLeaveCriticalRegion();
     return hasRoots;
 }
 
-static BOOLEAN DgIsProtectedAndGranted(
+static DG_DELETE_DECISION DgDecideDelete(
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG ProcessId,
     _In_ ULONGLONG ProcessStartKey,
-    _Out_ PBOOLEAN Granted)
+    _Out_writes_(DG_MAX_PATH_CHARS + 1) PWCHAR RootPathCopy,
+    _Out_ PUSHORT RootPathChars,
+    _Out_ PBOOLEAN Notify)
 {
     ULONG index;
+    LONG rootIndex = -1;
     ULONGLONG now = KeQueryInterruptTime();
-    BOOLEAN isProtected = FALSE;
+    BOOLEAN granted = FALSE;
+    DG_DELETE_DECISION decision = DgDecisionNotProtected;
 
-    *Granted = FALSE;
+    *RootPathChars = 0;
+    *Notify = FALSE;
+    RootPathCopy[0] = L'\0';
 
     KeEnterCriticalRegion();
     ExAcquirePushLockShared(&gStateLock);
@@ -996,12 +1034,12 @@ static BOOLEAN DgIsProtectedAndGranted(
     for (index = 0; index < DG_MAX_ROOTS; ++index) {
         if (gRoots[index].Length != 0 &&
             DgPathIsSameOrDescendant(Name, gRoots[index].Path, gRoots[index].Length)) {
-            isProtected = TRUE;
+            rootIndex = (LONG)index;
             break;
         }
     }
 
-    if (isProtected) {
+    if (rootIndex >= 0) {
         for (index = 0; index < DG_MAX_GRANTS; ++index) {
             if (gGrants[index].Length == 0 ||
                 gGrants[index].ProcessId != ProcessId ||
@@ -1011,15 +1049,41 @@ static BOOLEAN DgIsProtectedAndGranted(
             }
 
             if (DgPathIsSameOrDescendant(Name, gGrants[index].Path, gGrants[index].Length)) {
-                *Granted = TRUE;
+                granted = TRUE;
                 break;
             }
+        }
+
+        if (granted) {
+            /* An approved Broker deletion is never counted against the bulk limit. */
+            decision = DgDecisionAllow;
+        }
+        else if (gRoots[rootIndex].Mode == DG_ROOT_MODE_BULK) {
+            KIRQL oldIrql;
+            BOOLEAN allowed;
+
+            KeAcquireSpinLock(&gRoots[rootIndex].BulkLock, &oldIrql);
+            allowed = DgBulkAllow(&gRoots[rootIndex].Bulk, now, Notify);
+            KeReleaseSpinLock(&gRoots[rootIndex].BulkLock, oldIrql);
+
+            if (allowed) {
+                decision = DgDecisionAllow;
+            }
+            else {
+                decision = DgDecisionDenyBulk;
+                *RootPathChars = gRoots[rootIndex].Length;
+                RtlCopyMemory(RootPathCopy, gRoots[rootIndex].Path, gRoots[rootIndex].Length * sizeof(WCHAR));
+                RootPathCopy[gRoots[rootIndex].Length] = L'\0';
+            }
+        }
+        else {
+            decision = DgDecisionDenyFull;
         }
     }
 
     ExReleasePushLockShared(&gStateLock);
     KeLeaveCriticalRegion();
-    return isProtected;
+    return decision;
 }
 
 static NTSTATUS DgPortConnect(
@@ -1168,7 +1232,11 @@ static NTSTATUS DgPortMessage(
         break;
 
     case DgCommandAddRoot:
-        status = DgAddRoot(command);
+        status = DgAddRoot(command, DG_ROOT_MODE_FULL);
+        break;
+
+    case DgCommandAddBulkGuardRoot:
+        status = DgAddRoot(command, DG_ROOT_MODE_BULK);
         break;
 
     case DgCommandRemoveRoot:
@@ -1234,17 +1302,24 @@ static NTSTATUS DgReadCommandPath(_In_ const DG_COMMAND *Command, _Out_ PUSHORT 
     return STATUS_NAME_TOO_LONG;
 }
 
-static NTSTATUS DgAddRoot(_In_ const DG_COMMAND *Command)
+static NTSTATUS DgAddRoot(_In_ const DG_COMMAND *Command, _In_ ULONG Mode)
 {
     NTSTATUS status;
     USHORT lengthChars;
     ULONG index;
     LONG freeIndex = -1;
     UNICODE_STRING commandPath;
+    DG_BULK_STATE bulk;
 
     status = DgReadCommandPath(Command, &lengthChars);
     if (!NT_SUCCESS(status)) {
         return status;
+    }
+
+    RtlZeroMemory(&bulk, sizeof(bulk));
+    if (Mode == DG_ROOT_MODE_BULK &&
+        !DgBulkConfigure(&bulk, Command->ProcessId, Command->TtlMilliseconds)) {
+        return STATUS_INVALID_PARAMETER;
     }
 
     commandPath.Buffer = (PWCH)Command->Path;
@@ -1277,6 +1352,10 @@ static NTSTATUS DgAddRoot(_In_ const DG_COMMAND *Command)
         goto Exit;
     }
 
+    RtlZeroMemory(&gRoots[freeIndex], sizeof(gRoots[freeIndex]));
+    KeInitializeSpinLock(&gRoots[freeIndex].BulkLock);
+    gRoots[freeIndex].Mode = Mode;
+    gRoots[freeIndex].Bulk = bulk;
     gRoots[freeIndex].Length = lengthChars;
     RtlCopyMemory(gRoots[freeIndex].Path, Command->Path, lengthChars * sizeof(WCHAR));
     gRoots[freeIndex].Path[lengthChars] = L'\0';
@@ -1428,6 +1507,20 @@ static NTSTATUS DgRevoke(_In_ const DG_COMMAND *Command)
     ExReleasePushLockExclusive(&gStateLock);
     KeLeaveCriticalRegion();
     return status;
+}
+
+static ULONG DgFullRootCountLocked(VOID)
+{
+    ULONG index;
+    ULONG count = 0;
+
+    for (index = 0; index < DG_MAX_ROOTS; ++index) {
+        if (gRoots[index].Length != 0 && gRoots[index].Mode == DG_ROOT_MODE_FULL) {
+            ++count;
+        }
+    }
+
+    return count;
 }
 
 static ULONG DgRootCountLocked(VOID)

@@ -64,6 +64,7 @@ internal sealed class ApprovalContext : ApplicationContext
     private DateTimeOffset _lastThrottleNoticeUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastUnmappableNoticeUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastNamespaceNoticeUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastBulkNoticeUtc = DateTimeOffset.MinValue;
 
     public ApprovalContext(bool showWindow)
     {
@@ -200,7 +201,11 @@ internal sealed class ApprovalContext : ApplicationContext
 
                 if (!record.CanApprove)
                 {
-                    if (record.Operation is DriverDeleteOperation.MoveOut
+                    if (record.Operation == DriverDeleteOperation.BulkDelete)
+                    {
+                        ShowBulkNotice(record, decisionTime);
+                    }
+                    else if (record.Operation is DriverDeleteOperation.MoveOut
                         or DriverDeleteOperation.ReplaceProtectedDestination
                         or DriverDeleteOperation.RenameProtectedAncestor
                         or DriverDeleteOperation.HardLinkOut
@@ -272,6 +277,22 @@ internal sealed class ApprovalContext : ApplicationContext
             6000,
             Loc.T("notice.namespace.title"),
             Loc.T("notice.namespace.body", description, record.TargetPath),
+            ToolTipIcon.Warning);
+    }
+
+    // Not tied to the namespace-notice toggle: a bulk block means something is deleting a lot, quickly.
+    private void ShowBulkNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
+    {
+        if (now - _lastBulkNoticeUtc < TimeSpan.FromSeconds(_settings.NoticeCooldownSeconds))
+        {
+            return;
+        }
+
+        _lastBulkNoticeUtc = now;
+        _notifyIcon.ShowBalloonTip(
+            8000,
+            Loc.T("notice.bulk.title"),
+            Loc.T("notice.bulk.body", record.TargetPath),
             ToolTipIcon.Warning);
     }
 

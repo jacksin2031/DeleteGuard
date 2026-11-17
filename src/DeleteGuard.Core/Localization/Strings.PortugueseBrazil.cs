@@ -130,6 +130,25 @@ internal static partial class Strings
         ["cli.help.title"] = "DeleteGuard v0.2 - proteção contra exclusão com aprovação de administrador para caminhos NTFS",
         ["cli.help.note1"] = "Tentativas comuns de exclusão pelo Explorador/cmd/PowerShell/aplicativos são negadas pela ACL de contingência",
         ["cli.help.note2"] = "e, quando instalado e em execução, pelo minifiltro do sistema de arquivos do DeleteGuard.",
-        ["cli.help.note3"] = "Use 'deleteguard delete' para solicitar uma concessão de exclusão com escopo limitado aprovada pelo UAC."
+        ["cli.help.note3"] = "Use 'deleteguard delete' para solicitar uma concessão de exclusão com escopo limitado aprovada pelo UAC.",
+
+        ["list.col.mode"] = "Proteção",
+        ["mode.full"] = "Proteção completa",
+        ["mode.bulk"] = "Proteção contra exclusão em massa ({0} exclusões / {1} s)",
+        ["state.bulk"] = "Ativa apenas no driver",
+        ["add.mode.title"] = "Escolha o tipo de proteção",
+        ["add.mode.full.title"] = "Proteção completa",
+        ["add.mode.full.desc"] = "Nada dentro pode ser excluído por programas comuns. Usa permissões do NTFS mais o driver, portanto também funciona quando o driver não está carregado. Renomeações, movimentações e o salvamento por substituição de alguns programas dentro da pasta podem ser bloqueados.",
+        ["add.mode.bulk.title"] = "Proteção contra exclusão em massa",
+        ["add.mode.bulk.desc"] = "O trabalho do dia a dia não é afetado: arquivos individuais ainda podem ser excluídos, renomeados e editados. Se mais itens do que o limite abaixo forem excluídos dentro da janela de tempo, as exclusões seguintes são bloqueadas até que se pare de excluir por um tempo. Isso impede que um comando errado ou descontrolado esvazie a pasta. Ela é aplicada apenas pelo driver do DeleteGuard; se o driver não estiver carregado, esta pasta NÃO está protegida.",
+        ["add.mode.threshold"] = "Bloquear após mais de",
+        ["add.mode.window"] = "exclusões em",
+        ["btn.ok"] = "OK",
+        ["btn.cancel"] = "Cancelar",
+        ["add.confirmBulk"] = "• Arquivos individuais ainda podem ser excluídos normalmente\n• Mais de {0} exclusões em {1} segundos são bloqueadas até que se pare de excluir por um tempo\n• Só funciona enquanto o driver do DeleteGuard estiver carregado; caso contrário esta pasta NÃO está protegida\n• Para excluir muito de propósito, use o Broker (deleteguard delete <pasta>)\n• É necessária a aprovação de um administrador (UAC)\n\nContinuar?",
+        ["failure.driverUnavailable"] = "O driver do DeleteGuard não está carregado (ou é de uma versão incompatível), portanto a proteção contra exclusão em massa não pode ser ativada. Nada foi alterado.",
+        ["notice.bulk.title"] = "O DeleteGuard bloqueou uma exclusão em massa",
+        ["notice.bulk.body"] = "Arquivos demais foram excluídos rápido demais em:\n{0}\n\nAs exclusões seguintes nesta pasta são bloqueadas até que se pare de excluir por um tempo. Se for intencional, use 'deleteguard delete <pasta>' (ou a janela de gerenciamento) e aprove com o UAC.",
+        ["cli.help.bulk"] = "Adicione --bulk-guard [--threshold N] [--window SEGUNDOS] a protect para permitir exclusões normais, mas bloquear exclusões em massa (requer o driver)."
     };
 }

@@ -121,6 +121,17 @@ The v0.2.5/v0.2.6 work was developed on three parallel lines that each re-implem
 
 The previous line tips are preserved as `archive/*` branches and the original remote branches are untouched.
 
+## v0.2.9 bulk-delete guard — build-verified, runtime gate pending
+
+- Per-folder protection type: full protection (unchanged) or bulk-delete guard.
+- Driver (protocol v4): `AddBulkGuardRoot`, per-root rate limiter (`DeleteGuardBulk.h`), `BulkDelete` event naming the folder; bulk-guard roots are exempt from the rename/link gates.
+- The rate limiter is a dependency-free header compiled into the driver and unit-tested in user mode, including mutation checks (`tests/native`, run by CI).
+- Broker: `--bulk-guard [--threshold=N] [--window=S]`; refuses unless the driver answers (exit code 13); keeps the delete grant alive during long deletions.
+- Relay/Agent: bulk events are non-approvable; dedicated notice.
+- Management window: protection-type dialog and column; CLI `--bulk-guard`; ten languages.
+
+Release gate remaining: run `scripts/testvm/run-bulkguard-validation.ps1` (and the existing suites, now against protocol v4) in a disposable VM under Driver Verifier.
+
 ## v0.3 volume protection
 
 - Detect and gate destructive volume operations where feasible.

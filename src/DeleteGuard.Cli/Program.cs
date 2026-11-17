@@ -1,6 +1,7 @@
 using System.Security.Principal;
 using DeleteGuard.Core.Driver;
 using DeleteGuard.Core.Localization;
+using DeleteGuard.Core.Models;
 using DeleteGuard.Core.Security;
 using DeleteGuard.Core.Services;
 
@@ -49,12 +50,58 @@ internal static class Program
         }
 
         var forwarded = new List<string> { command, Path.GetFullPath(args[1]) };
-        if (command == "protect" && args.Skip(2).Any(arg => string.Equals(arg, "--allow-volume-root", StringComparison.OrdinalIgnoreCase)))
+        if (command == "protect")
         {
-            forwarded.Add("--allow-volume-root");
+            var rest = args.Skip(2).ToArray();
+            if (rest.Any(arg => string.Equals(arg, "--allow-volume-root", StringComparison.OrdinalIgnoreCase)))
+            {
+                forwarded.Add("--allow-volume-root");
+            }
+
+            if (rest.Any(arg => string.Equals(arg, "--bulk-guard", StringComparison.OrdinalIgnoreCase)))
+            {
+                forwarded.Add("--bulk-guard");
+                if (!TryForwardNumber(rest, "--threshold", forwarded) || !TryForwardNumber(rest, "--window", forwarded))
+                {
+                    return 2;
+                }
+            }
         }
 
         return BrokerLauncher.RunElevated(forwarded.ToArray());
+    }
+
+    /// <summary>Accepts "--name N" or "--name=N" and forwards it to the Broker as "--name=N".</summary>
+    private static bool TryForwardNumber(string[] args, string name, List<string> forwarded)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            string? value = null;
+            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = i + 1 < args.Length ? args[i + 1] : string.Empty;
+            }
+            else if (args[i].StartsWith(name + "=", StringComparison.OrdinalIgnoreCase))
+            {
+                value = args[i][(name.Length + 1)..];
+            }
+
+            if (value is null)
+            {
+                continue;
+            }
+
+            if (!int.TryParse(value, out var number) || number <= 0)
+            {
+                Console.Error.WriteLine($"{Loc.T("cli.usageLabel")}: deleteguard protect <path> --bulk-guard [--threshold N] [--window SECONDS]");
+                return false;
+            }
+
+            forwarded.Add($"{name}={number}");
+            return true;
+        }
+
+        return true;
     }
 
     private static int ListPolicies()
@@ -69,8 +116,10 @@ internal static class Program
 
         foreach (var policy in policies.OrderBy(policy => policy.RootPath, StringComparer.OrdinalIgnoreCase))
         {
-            var acl = TryGetAclState(policy.RootPath);
-            Console.WriteLine($"{policy.RootPath}\t{(policy.Enabled ? "enabled" : "disabled")}\tacl={acl}\tcreated={policy.CreatedUtc:O}");
+            var bulk = policy.Mode == ProtectionMode.BulkGuard;
+            var acl = bulk ? "n/a" : TryGetAclState(policy.RootPath);
+            var mode = bulk ? $"bulk({policy.BulkThreshold}/{policy.BulkWindowSeconds}s)" : "full";
+            Console.WriteLine($"{policy.RootPath}\t{(policy.Enabled ? "enabled" : "disabled")}\tacl={acl}\tcreated={policy.CreatedUtc:O}\tmode={mode}");
         }
 
         return 0;
@@ -230,7 +279,7 @@ internal static class Program
         Console.WriteLine(Loc.T("cli.help.title"));
         Console.WriteLine();
         Console.WriteLine($"{Loc.T("cli.usageLabel")}:");
-        Console.WriteLine("  deleteguard protect <path> [--allow-volume-root]");
+        Console.WriteLine("  deleteguard protect <path> [--allow-volume-root] [--bulk-guard [--threshold N] [--window SECONDS]]");
         Console.WriteLine("  deleteguard unprotect <path>");
         Console.WriteLine("  deleteguard delete <path>");
         Console.WriteLine("  deleteguard status <path>");
@@ -241,5 +290,6 @@ internal static class Program
         Console.WriteLine(Loc.T("cli.help.note1"));
         Console.WriteLine(Loc.T("cli.help.note2"));
         Console.WriteLine(Loc.T("cli.help.note3"));
+        Console.WriteLine(Loc.T("cli.help.bulk"));
     }
 }

@@ -130,6 +130,25 @@ internal static partial class Strings
         ["cli.help.title"] = "DeleteGuard v0.2 - protección contra eliminación con aprobación de administrador para rutas NTFS",
         ["cli.help.note1"] = "Los intentos normales de eliminación desde el Explorador/cmd/PowerShell/aplicaciones se deniegan mediante la ACL de respaldo",
         ["cli.help.note2"] = "y, si está instalado y en ejecución, mediante el minifiltro del sistema de archivos de DeleteGuard.",
-        ["cli.help.note3"] = "Use 'deleteguard delete' para solicitar una concesión de eliminación acotada aprobada por UAC."
+        ["cli.help.note3"] = "Use 'deleteguard delete' para solicitar una concesión de eliminación acotada aprobada por UAC.",
+
+        ["list.col.mode"] = "Protección",
+        ["mode.full"] = "Protección completa",
+        ["mode.bulk"] = "Protección contra eliminación masiva ({0} eliminaciones / {1} s)",
+        ["state.bulk"] = "Activa solo en el controlador",
+        ["add.mode.title"] = "Elija el tipo de protección",
+        ["add.mode.full.title"] = "Protección completa",
+        ["add.mode.full.desc"] = "Los programas normales no pueden eliminar nada del interior. Usa permisos NTFS más el controlador, por lo que también funciona si el controlador no está cargado. Es posible que se bloqueen los cambios de nombre, los movimientos y el guardado por sobrescritura de algunos programas dentro de la carpeta.",
+        ["add.mode.bulk.title"] = "Protección contra eliminación masiva",
+        ["add.mode.bulk.desc"] = "El trabajo diario no se ve afectado: los archivos individuales se pueden seguir eliminando, renombrando y editando. Si se eliminan más elementos que el límite indicado debajo dentro del intervalo, se bloquean las eliminaciones posteriores hasta que se deje de eliminar durante un tiempo. Esto evita que un comando erróneo o descontrolado vacíe la carpeta. Solo la aplica el controlador de DeleteGuard; si no está cargado, esta carpeta NO está protegida.",
+        ["add.mode.threshold"] = "Bloquear tras más de",
+        ["add.mode.window"] = "eliminaciones en",
+        ["btn.ok"] = "Aceptar",
+        ["btn.cancel"] = "Cancelar",
+        ["add.confirmBulk"] = "• Los archivos individuales se pueden eliminar con normalidad\n• Más de {0} eliminaciones en {1} segundos se bloquean hasta que se deje de eliminar durante un tiempo\n• Solo funciona mientras el controlador de DeleteGuard esté cargado; de lo contrario esta carpeta NO está protegida\n• Para eliminar mucho a propósito, use el Broker (deleteguard delete <carpeta>)\n• Se requiere la aprobación de un administrador (UAC)\n\n¿Continuar?",
+        ["failure.driverUnavailable"] = "El controlador de DeleteGuard no está cargado (o es una versión incompatible), por lo que no se puede activar la protección contra eliminación masiva. No se cambió nada.",
+        ["notice.bulk.title"] = "DeleteGuard bloqueó una eliminación masiva",
+        ["notice.bulk.body"] = "Se eliminaron demasiados archivos demasiado rápido en:\n{0}\n\nLas eliminaciones posteriores en esta carpeta se bloquean hasta que se deje de eliminar durante un tiempo. Si es intencionado, use 'deleteguard delete <carpeta>' (o la ventana de administración) y apruébelo con UAC.",
+        ["cli.help.bulk"] = "Agregue --bulk-guard [--threshold N] [--window SEGUNDOS] a protect para permitir eliminaciones normales pero bloquear las masivas (requiere el controlador)."
     };
 }

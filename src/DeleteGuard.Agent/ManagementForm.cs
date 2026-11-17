@@ -163,7 +163,8 @@ internal sealed class ManagementForm : Form
         _protectedList.MultiSelect = false;
         _protectedList.HideSelection = false;
         _protectedList.GridLines = false;
-        _protectedList.Columns.Add(Loc.T("list.col.folder"), 400);
+        _protectedList.Columns.Add(Loc.T("list.col.folder"), 360);
+        _protectedList.Columns.Add(Loc.T("list.col.mode"), 200);
         _protectedList.Columns.Add(Loc.T("list.col.state"), 170);
         _protectedList.Columns.Add(Loc.T("list.col.created"), 160);
         _protectedList.SelectedIndexChanged += (_, _) => UpdateButtons();
@@ -437,6 +438,7 @@ internal sealed class ManagementForm : Form
             foreach (var entry in entries)
             {
                 var item = new ListViewItem(entry.RootPath) { Tag = entry };
+                item.SubItems.Add(DescribeMode(entry));
                 item.SubItems.Add(DescribeState(entry));
                 item.SubItems.Add(entry.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
                 if (entry.Acl != AclState.Present || !entry.Enabled)
@@ -455,6 +457,11 @@ internal sealed class ManagementForm : Form
         }
     }
 
+    private static string DescribeMode(ProtectionEntry entry) =>
+        entry.Mode == ProtectionMode.BulkGuard
+            ? Loc.T("mode.bulk", entry.BulkThreshold, entry.BulkWindowSeconds)
+            : Loc.T("mode.full");
+
     private static string DescribeState(ProtectionEntry entry)
     {
         if (!entry.Enabled)
@@ -467,6 +474,7 @@ internal sealed class ManagementForm : Form
             AclState.Present => Loc.T("state.protected"),
             AclState.Missing => Loc.T("state.aclMissing"),
             AclState.FolderMissing => Loc.T("state.folderMissing"),
+            AclState.NotApplicable => Loc.T("state.bulk"),
             _ => Loc.T("state.unknown")
         };
     }
@@ -506,12 +514,22 @@ internal sealed class ManagementForm : Form
             return;
         }
 
+        using var options = new ProtectionOptionsDialog(check.Path, Font);
+        if (options.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        var bulk = options.Mode == ProtectionMode.BulkGuard;
         var warning = check.IsVolumeRoot
             ? Loc.T("add.confirmVolume", check.Path)
             : Loc.T("add.confirmFolder", check.Path);
+        var body = bulk
+            ? Loc.T("add.confirmBulk", options.Threshold, options.WindowSeconds)
+            : Loc.T("add.confirmBody");
         var confirm = MessageBox.Show(
             this,
-            warning + Loc.T("add.confirmBody"),
+            warning + body,
             Loc.T("add.confirmTitle"),
             MessageBoxButtons.YesNo,
             check.IsVolumeRoot ? MessageBoxIcon.Warning : MessageBoxIcon.Question,
@@ -522,7 +540,7 @@ internal sealed class ManagementForm : Form
         }
 
         await RunBrokerAsync(
-            () => _broker.ProtectAsync(check.Path, check.IsVolumeRoot),
+            () => _broker.ProtectAsync(check.Path, check.IsVolumeRoot, options.Mode, options.Threshold, options.WindowSeconds),
             Loc.T("add.success", check.Path),
             Loc.T("add.title"));
     }
@@ -606,6 +624,7 @@ internal sealed class ManagementForm : Form
             BrokerFailure.StartFailed => Loc.T("failure.startFailed"),
             BrokerFailure.NotElevated => Loc.T("failure.notElevated"),
             BrokerFailure.Busy => Loc.T("failure.busy"),
+            BrokerFailure.DriverUnavailable => Loc.T("failure.driverUnavailable"),
             _ => Loc.T("failure.failed", result.ExitCode)
         };
 

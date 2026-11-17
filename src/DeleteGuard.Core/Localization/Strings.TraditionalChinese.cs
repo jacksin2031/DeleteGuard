@@ -130,6 +130,25 @@ internal static partial class Strings
         ["cli.help.title"] = "DeleteGuard v0.2 - 針對 NTFS 路徑、需系統管理員核准的刪除保護",
         ["cli.help.note1"] = "一般的檔案總管／cmd／PowerShell／應用程式刪除嘗試會被 ACL 後備機制拒絕，",
         ["cli.help.note2"] = "若已安裝並執行 DeleteGuard 檔案系統 minifilter，也會被它拒絕。",
-        ["cli.help.note3"] = "使用 'deleteguard delete' 來要求經 UAC 核准的限定範圍刪除授權。"
+        ["cli.help.note3"] = "使用 'deleteguard delete' 來要求經 UAC 核准的限定範圍刪除授權。",
+
+        ["list.col.mode"] = "保護方式",
+        ["mode.full"] = "完整保護",
+        ["mode.bulk"] = "大量刪除防護（{1} 秒內 {0} 次刪除）",
+        ["state.bulk"] = "僅由驅動程式執行",
+        ["add.mode.title"] = "選擇保護方式",
+        ["add.mode.full.title"] = "完整保護",
+        ["add.mode.full.desc"] = "資料夾內的所有內容都無法被一般程式刪除。使用 NTFS 權限加上驅動程式，因此驅動程式未載入時也有效。資料夾內的重新命名、移動，以及部分程式的覆寫儲存可能會被阻擋。",
+        ["add.mode.bulk.title"] = "大量刪除防護",
+        ["add.mode.bulk.desc"] = "日常作業不受影響：仍可正常刪除、重新命名和編輯單一檔案。若在時間窗內刪除的數量超過下方的上限，之後的刪除會被阻擋，直到停止刪除一段時間。這可以防止誤下或失控的指令把資料夾清空。此模式只由 DeleteGuard 驅動程式執行；驅動程式未載入時，這個資料夾「沒有」受到保護。",
+        ["add.mode.threshold"] = "超過以下數量即阻擋",
+        ["add.mode.window"] = "次刪除，於",
+        ["btn.ok"] = "確定",
+        ["btn.cancel"] = "取消",
+        ["add.confirmBulk"] = "• 仍可正常刪除單一檔案\n• {1} 秒內刪除超過 {0} 個項目時會被阻擋，直到停止刪除一段時間\n• 只有在 DeleteGuard 驅動程式已載入時才有效；否則這個資料夾「沒有」受到保護\n• 若要刻意大量刪除，請使用 Broker（deleteguard delete <資料夾>）\n• 需要系統管理員核准（UAC）\n\n繼續？",
+        ["failure.driverUnavailable"] = "DeleteGuard 驅動程式尚未載入（或版本不相容），因此無法啟用大量刪除防護。沒有任何變更。",
+        ["notice.bulk.title"] = "DeleteGuard 已阻擋大量刪除",
+        ["notice.bulk.body"] = "以下資料夾中的檔案在短時間內被大量刪除：\n{0}\n\n此資料夾之後的刪除會被阻擋，直到停止刪除一段時間。如果這是刻意的操作，請使用 'deleteguard delete <資料夾>'（或管理視窗）並以 UAC 核准。",
+        ["cli.help.bulk"] = "在 protect 後加上 --bulk-guard [--threshold N] [--window 秒數]，可允許一般刪除但阻擋大量刪除（需要驅動程式）。"
     };
 }

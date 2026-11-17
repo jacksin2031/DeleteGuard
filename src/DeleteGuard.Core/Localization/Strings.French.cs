@@ -130,6 +130,25 @@ internal static partial class Strings
         ["cli.help.title"] = "DeleteGuard v0.2 - protection contre la suppression sous approbation administrateur pour les chemins NTFS",
         ["cli.help.note1"] = "Les tentatives de suppression ordinaires depuis l'Explorateur/cmd/PowerShell/les applications sont refusées par l'ACL de repli",
         ["cli.help.note2"] = "et, lorsqu'il est installé et actif, par le minifiltre du système de fichiers DeleteGuard.",
-        ["cli.help.note3"] = "Utilisez 'deleteguard delete' pour demander une autorisation de suppression limitée approuvée par l'UAC."
+        ["cli.help.note3"] = "Utilisez 'deleteguard delete' pour demander une autorisation de suppression limitée approuvée par l'UAC.",
+
+        ["list.col.mode"] = "Protection",
+        ["mode.full"] = "Protection complète",
+        ["mode.bulk"] = "Garde contre la suppression en masse ({0} suppressions / {1} s)",
+        ["state.bulk"] = "Active dans le pilote uniquement",
+        ["add.mode.title"] = "Choisissez le type de protection",
+        ["add.mode.full.title"] = "Protection complète",
+        ["add.mode.full.desc"] = "Rien à l'intérieur ne peut être supprimé par les programmes ordinaires. Utilise les autorisations NTFS et le pilote, et fonctionne donc aussi lorsque le pilote n'est pas chargé. Les renommages, déplacements et enregistrements par écrasement de certains programmes dans le dossier peuvent être bloqués.",
+        ["add.mode.bulk.title"] = "Garde contre la suppression en masse",
+        ["add.mode.bulk.desc"] = "Le travail quotidien n'est pas affecté : les fichiers individuels peuvent toujours être supprimés, renommés et modifiés. Si plus d'éléments que la limite ci-dessous sont supprimés dans la fenêtre de temps, les suppressions suivantes sont bloquées jusqu'à ce que les suppressions cessent pendant un moment. Cela empêche une commande erronée ou incontrôlée de vider le dossier. Elle n'est appliquée que par le pilote DeleteGuard ; si le pilote n'est pas chargé, ce dossier n'est PAS protégé.",
+        ["add.mode.threshold"] = "Bloquer au-delà de",
+        ["add.mode.window"] = "suppressions en",
+        ["btn.ok"] = "OK",
+        ["btn.cancel"] = "Annuler",
+        ["add.confirmBulk"] = "• Les fichiers individuels peuvent toujours être supprimés normalement\n• Plus de {0} suppressions en {1} secondes sont bloquées jusqu'à ce que les suppressions cessent pendant un moment\n• Ne fonctionne que lorsque le pilote DeleteGuard est chargé ; sinon ce dossier n'est PAS protégé\n• Pour supprimer beaucoup volontairement, utilisez le Broker (deleteguard delete <dossier>)\n• L'approbation d'un administrateur (UAC) est requise\n\nContinuer ?",
+        ["failure.driverUnavailable"] = "Le pilote DeleteGuard n'est pas chargé (ou sa version est incompatible) : la garde contre la suppression en masse ne peut pas être activée. Rien n'a été modifié.",
+        ["notice.bulk.title"] = "DeleteGuard a bloqué une suppression en masse",
+        ["notice.bulk.body"] = "Trop de fichiers ont été supprimés trop vite dans :\n{0}\n\nLes suppressions suivantes dans ce dossier sont bloquées jusqu'à ce que les suppressions cessent pendant un moment. Si c'est voulu, utilisez 'deleteguard delete <dossier>' (ou la fenêtre de gestion) et approuvez avec l'UAC.",
+        ["cli.help.bulk"] = "Ajoutez --bulk-guard [--threshold N] [--window SECONDES] à protect pour autoriser les suppressions normales mais bloquer les suppressions en masse (nécessite le pilote)."
     };
 }

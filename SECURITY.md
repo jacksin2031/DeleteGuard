@@ -86,6 +86,21 @@ DeleteGuard is not yet a complete storage-integrity boundary. Current developmen
 
 The filter currently attaches to NTFS only.
 
+## Bulk-delete guard (optional per folder)
+
+For a folder protected in *bulk-delete guard* mode, ordinary deletes, renames, moves and edits work normally. The minifilter counts deletions per protected folder; once more than the configured number (default 25) happen within the configured window (default 10 s), that deletion and every further one in the folder are denied. Each denied attempt extends the lock, so a runaway command that keeps retrying cannot simply wait it out; the lock clears after a quiet period of three windows (at least 15 s). The aim is to stop a mistaken or runaway command (for example a bad `rm -rf` or an AI agent's wrong path) from wiping the folder.
+
+What this mode is, and is not:
+
+- **Driver only.** It uses no NTFS ACL (a deny-delete ACL would also block renames and overwrite-saves, which this mode must leave alone). If the minifilter is not loaded the folder is **not protected at all**. The Broker therefore refuses to enable the mode unless the driver answers, and the management window states this before adding it.
+- **It limits damage, it does not make deletion impossible.** Up to the threshold of files can still be deleted per window before the lock engages. Use full protection for data that must not lose even one file.
+- **Only deletions are counted.** Moving files out (`robocopy /MOVE`, `mv`), truncating or overwriting contents, `format`, raw-disk writes and `cipher /w` are not covered; bulk-guard folders are also exempt from the rename/move-out/hard-link gates described below.
+- **Counters live in the driver.** They reset when the driver reloads or when policies are re-synchronised (any Broker protect, unprotect or delete does this), so a reset can briefly reopen the allowance.
+- **Deliberate large deletions** go through `deleteguard delete <folder>` (UAC). The Broker's kernel grant bypasses the counter and is renewed while a long deletion runs.
+- Bulk-delete events name the protected *folder* and are never approvable from the Agent prompt, because approving would delete that folder.
+
+The state machine is compiled into the driver from `drivers/DeleteGuard.Filter/DeleteGuardBulk.h` and unit-tested in user mode (`tests/native`). Driver wiring has not yet run under a loaded driver; `scripts/testvm/run-bulkguard-validation.ps1` is the runtime gate.
+
 ## Namespace mutation gate
 
 Delete grants never authorize namespace changes. The filter denies, without any approval path:

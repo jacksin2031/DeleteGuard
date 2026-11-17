@@ -66,7 +66,17 @@ public sealed class FilterPortClient : IDisposable
             }
 
             var ntPath = NtPathConverter.ToNtPath(policy.RootPath);
-            Send(DriverCommand.Create(DriverCommandType.AddRoot, ntPath));
+            if (policy.Mode == ProtectionMode.BulkGuard)
+            {
+                Send(DriverCommand.CreateBulkGuardRoot(
+                    ntPath,
+                    checked((uint)policy.BulkThreshold),
+                    checked((uint)policy.BulkWindowSeconds * 1000u)));
+            }
+            else
+            {
+                Send(DriverCommand.Create(DriverCommandType.AddRoot, ntPath));
+            }
         }
     }
 

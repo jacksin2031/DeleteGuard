@@ -34,6 +34,9 @@ jobs:
             $allErrors | Write-Error
             exit 1
           }
+      - name: Native tests (bulk-delete rate limiter, compiled with MSVC /W4 /WX)
+        shell: pwsh
+        run: ./tests/native/run-native-tests.ps1
       - name: Compile test-VM native probes (Windows PowerShell 5.1)
         shell: powershell
         run: |

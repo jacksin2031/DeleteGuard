@@ -31,6 +31,9 @@ Use this checklist together with `docs/RUNTIME-VALIDATION.md`.
 - [ ] `run-protected-ancestor-rename-validation.ps1` passes under Driver Verifier
 - [ ] `run-rename-boundary-validation.ps1` passes under Driver Verifier
 - [ ] `run-hardlink-validation.ps1` passes under Driver Verifier
+- [ ] `run-bulkguard-validation.ps1` passes under Driver Verifier (normal work allowed, runaway delete stopped near the threshold, retries cannot unlock, event non-approvable, lock clears, Broker bulk delete succeeds)
+- [ ] bulk-guard protect is refused (exit code 13) while the driver is stopped
+- [ ] after a driver reload, bulk-guard folders are enforced again once the Relay re-synchronises policies
 - [ ] an external hard link to a protected file is denied and the same-root link is allowed
 - [ ] hard-link denial events are `canApprove: false`
 - [ ] an ancestor directory containing a protected root cannot be renamed

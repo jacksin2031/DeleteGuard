@@ -130,6 +130,25 @@ internal static partial class Strings
         ["cli.help.title"] = "DeleteGuard v0.2 - NTFS パスに対する、管理者承認が必要な削除保護",
         ["cli.help.note1"] = "エクスプローラー／cmd／PowerShell／アプリによる通常の削除の試行は、ACL によるフォールバックで拒否され、",
         ["cli.help.note2"] = "DeleteGuard ファイルシステム minifilter がインストールされ動作している場合は、それによっても拒否されます。",
-        ["cli.help.note3"] = "UAC で承認された範囲限定の削除権限を要求するには、'deleteguard delete' を使用します。"
+        ["cli.help.note3"] = "UAC で承認された範囲限定の削除権限を要求するには、'deleteguard delete' を使用します。",
+
+        ["list.col.mode"] = "保護方式",
+        ["mode.full"] = "完全保護",
+        ["mode.bulk"] = "一括削除ガード（{1} 秒間に {0} 件の削除）",
+        ["state.bulk"] = "ドライバーのみで動作",
+        ["add.mode.title"] = "保護の種類を選択",
+        ["add.mode.full.title"] = "完全保護",
+        ["add.mode.full.desc"] = "フォルダー内のすべての内容は、通常のプログラムから削除できません。NTFS のアクセス許可とドライバーを使用するため、ドライバーが読み込まれていなくても機能します。フォルダー内での名前の変更、移動、一部のプログラムの上書き保存がブロックされる場合があります。",
+        ["add.mode.bulk.title"] = "一括削除ガード",
+        ["add.mode.bulk.desc"] = "日常の作業には影響しません。個々のファイルの削除、名前の変更、編集は通常どおり行えます。時間枠内に下の上限を超えて削除されると、削除が一定時間止まるまで以降の削除をブロックします。誤ったコマンドや暴走したコマンドによるフォルダーの全消去を防ぎます。この方式は DeleteGuard ドライバーのみで動作します。ドライバーが読み込まれていない場合、このフォルダーは保護されません。",
+        ["add.mode.threshold"] = "次の件数を超えるとブロック",
+        ["add.mode.window"] = "件の削除（期間：",
+        ["btn.ok"] = "OK",
+        ["btn.cancel"] = "キャンセル",
+        ["add.confirmBulk"] = "• 個々のファイルは通常どおり削除できます\n• {1} 秒間に {0} 件を超える削除は、削除が一定時間止まるまでブロックされます\n• DeleteGuard ドライバーが読み込まれている間のみ有効です。そうでない場合、このフォルダーは保護されません\n• 意図的に大量に削除するには、Broker（deleteguard delete <フォルダー>）を使用してください\n• 管理者の承認（UAC）が必要です\n\n続行しますか？",
+        ["failure.driverUnavailable"] = "DeleteGuard ドライバーが読み込まれていない（または互換性のないバージョンの）ため、一括削除ガードを有効にできません。変更は行われていません。",
+        ["notice.bulk.title"] = "DeleteGuard が一括削除をブロックしました",
+        ["notice.bulk.body"] = "次のフォルダーで、短時間に大量のファイルが削除されました：\n{0}\n\nこのフォルダーでの以降の削除は、削除が一定時間止まるまでブロックされます。意図的な操作の場合は、'deleteguard delete <フォルダー>'（または管理ウィンドウ）を使用し、UAC で承認してください。",
+        ["cli.help.bulk"] = "protect に --bulk-guard [--threshold N] [--window 秒数] を付けると、通常の削除は許可し、一括削除のみをブロックします（ドライバーが必要です）。"
     };
 }

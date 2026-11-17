@@ -123,6 +123,26 @@ artifacts\driver-x64
 
 The CI driver artifact is intentionally **unsigned**. Do not load it on a production machine. See [docs/MINIFILTER.md](docs/MINIFILTER.md).
 
+## Protection types
+
+Choose one per folder when adding it (management window) or on the command line:
+
+| | Full protection (default) | Bulk-delete guard |
+|---|---|---|
+| Delete a file | blocked | allowed |
+| Rename / move / edit | rename-out and some overwrite-saves blocked | allowed |
+| Delete a lot quickly | blocked | **blocked** after the threshold, until deleting stops for a while |
+| Needs the driver | no (NTFS ACL fallback) | **yes** — without it the folder is not protected |
+| Use it for | data that must not be touched | working folders where a runaway command is the risk |
+
+```powershell
+deleteguard protect D:\Projects\Important                                   # full protection
+deleteguard protect D:\Projects\Active --bulk-guard                         # 25 deletions / 10 s
+deleteguard protect D:\Projects\Active --bulk-guard --threshold 50 --window 30
+```
+
+A deliberate large deletion in a bulk-guard folder: `deleteguard delete <folder>` (UAC). See [SECURITY.md](SECURITY.md) for what the bulk-delete guard does and does not cover.
+
 ## Languages
 
 The Agent window, approval prompts, notifications and CLI help are available in English, 繁體中文, 简体中文, 日本語, 한국어, Español, Français, Deutsch, Português (Brasil) and Русский. "Automatic" (the default) follows the Windows display language; choose another one in the management window's Settings tab. The CLI reads the same per-user setting. Machine-readable output (`list`, `status`) and the Broker's audit data stay in English.
