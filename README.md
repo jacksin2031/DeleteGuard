@@ -62,6 +62,16 @@ deleteguard doctor
 
 Protecting the Windows system-volume root is refused. Protecting a non-system NTFS volume root requires the explicit `--allow-volume-root` option.
 
+## Management window
+
+`DeleteGuard.Agent.exe` lives in the system tray and opens a management window (double-click the tray icon, or start the Agent again). Starting it with `--background` keeps it tray-only, which is what the login auto-start uses.
+
+- **保護清單 (protected folders)** — add a folder with a folder picker or remove an existing protection. Each change is sent to the Broker and requires a normal Windows UAC approval; the window itself never runs elevated. Invalid requests (network paths, reparse points, non-NTFS, overlapping roots, the system-volume root) are rejected before any UAC prompt, and the Broker repeats every check.
+- **設定 (settings)** — approval-prompt visibility and rate limit, notification toggles and cooldown, and start-with-Windows. Settings live in `%AppData%\DeleteGuard\settings.json`, are clamped to safe ranges when loaded, and only affect prompts and notifications. They never change what is denied.
+- **活動紀錄 (activity)** — the Broker audit log and the recent blocked-event history.
+
+Closing the window hides it; use the tray menu to exit the Agent.
+
 ## Kernel operations covered
 
 The minifilter currently gates:

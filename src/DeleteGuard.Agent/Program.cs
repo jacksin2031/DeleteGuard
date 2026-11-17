@@ -1,5 +1,3 @@
-using System.ComponentModel;
-using System.Diagnostics;
 using System.Drawing;
 using DeleteGuard.Core.Driver;
 using DeleteGuard.Core.Models;
@@ -10,31 +8,53 @@ namespace DeleteGuard.Agent;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         if (!OperatingSystem.IsWindows())
         {
             return;
         }
 
+        var background = args.Any(arg => string.Equals(arg, AutoStart.BackgroundArgument, StringComparison.OrdinalIgnoreCase));
+
         using var mutex = new Mutex(initiallyOwned: true, name: "Local\\DeleteGuard.Agent", out var createdNew);
         if (!createdNew)
         {
+            // Already running: ask the running Agent to open its window, unless this is just a login auto-start.
+            if (!background)
+            {
+                try
+                {
+                    using var signal = EventWaitHandle.OpenExisting(ApprovalContext.ShowWindowEventName);
+                    signal.Set();
+                }
+                catch (WaitHandleCannotBeOpenedException)
+                {
+                }
+            }
+
             return;
         }
 
         ApplicationConfiguration.Initialize();
-        Application.Run(new ApprovalContext());
+        Application.Run(new ApprovalContext(showWindow: !background));
     }
 }
 
 internal sealed class ApprovalContext : ApplicationContext
 {
+    public const string ShowWindowEventName = "Local\\DeleteGuard.Agent.ShowWindow";
+
     private readonly DeniedDeleteEventStore _store = new();
     private readonly HashSet<Guid> _known = new();
-    private readonly ApprovalPromptLimiter _promptLimiter = new(
-        maxPrompts: 3,
-        window: TimeSpan.FromSeconds(30));
+    private readonly AgentSettingsStore _settingsStore = new();
+    private readonly BrokerClient _broker = new();
+    private readonly Control _ui = new();
+    private readonly EventWaitHandle _showWindowSignal;
+    private readonly RegisteredWaitHandle _showWindowRegistration;
+    private AgentSettings _settings;
+    private ApprovalPromptLimiter _promptLimiter;
+    private ManagementForm? _window;
     private readonly NotifyIcon _notifyIcon;
     private readonly System.Windows.Forms.Timer _timer;
     private bool _polling;
@@ -42,23 +62,40 @@ internal sealed class ApprovalContext : ApplicationContext
     private DateTimeOffset _lastUnmappableNoticeUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastNamespaceNoticeUtc = DateTimeOffset.MinValue;
 
-    public ApprovalContext()
+    public ApprovalContext(bool showWindow)
     {
+        _settings = _settingsStore.Load();
+        _promptLimiter = CreateLimiter(_settings);
+
         foreach (var record in _store.ReadLast(200))
         {
             _known.Add(record.EventId);
         }
 
+        // A handle is needed so other threads can marshal onto the UI thread.
+        _ = _ui.Handle;
+        _showWindowSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowWindowEventName);
+        _showWindowRegistration = ThreadPool.RegisterWaitForSingleObject(
+            _showWindowSignal,
+            (_, _) => _ui.BeginInvoke(ShowWindow),
+            null,
+            Timeout.Infinite,
+            executeOnlyOnce: false);
+
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Exit", null, (_, _) => ExitThread());
+        var openItem = menu.Items.Add("開啟管理視窗", null, (_, _) => ShowWindow());
+        openItem.Font = new Font(openItem.Font, FontStyle.Bold);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("結束", null, (_, _) => ExitThread());
 
         _notifyIcon = new NotifyIcon
         {
             Icon = SystemIcons.Shield,
-            Text = "DeleteGuard approval agent",
+            Text = "DeleteGuard",
             Visible = true,
             ContextMenuStrip = menu
         };
+        _notifyIcon.DoubleClick += (_, _) => ShowWindow();
 
         _timer = new System.Windows.Forms.Timer
         {
@@ -66,14 +103,39 @@ internal sealed class ApprovalContext : ApplicationContext
             Enabled = true
         };
         _timer.Tick += (_, _) => Poll();
+
+        if (showWindow)
+        {
+            _ui.BeginInvoke(ShowWindow);
+        }
+    }
+
+    private static ApprovalPromptLimiter CreateLimiter(AgentSettings settings) => new(
+        maxPrompts: settings.MaxPromptsPerWindow,
+        window: TimeSpan.FromSeconds(settings.PromptWindowSeconds));
+
+    private void ShowWindow()
+    {
+        _window ??= new ManagementForm(_settingsStore, _broker, ApplySettings);
+        _window.ShowAndActivate();
+    }
+
+    private void ApplySettings(AgentSettings settings)
+    {
+        _settings = settings;
+        _promptLimiter = CreateLimiter(settings);
     }
 
     protected override void ExitThreadCore()
     {
         _timer.Stop();
         _timer.Dispose();
+        _showWindowRegistration.Unregister(null);
+        _showWindowSignal.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
+        _window?.Dispose();
+        _ui.Dispose();
         base.ExitThreadCore();
     }
 
@@ -97,7 +159,7 @@ internal sealed class ApprovalContext : ApplicationContext
                 }
 
                 var decisionTime = DateTimeOffset.UtcNow;
-                if (decisionTime - record.ObservedUtc > TimeSpan.FromSeconds(20))
+                if (decisionTime - record.ObservedUtc > TimeSpan.FromSeconds(_settings.PromptMaxAgeSeconds))
                 {
                     continue;
                 }
@@ -116,6 +178,11 @@ internal sealed class ApprovalContext : ApplicationContext
                     {
                         ShowUnmappableNotice(record, decisionTime);
                     }
+                    continue;
+                }
+
+                if (!_settings.ShowApprovalPrompts)
+                {
                     continue;
                 }
 
@@ -146,7 +213,12 @@ internal sealed class ApprovalContext : ApplicationContext
 
     private void ShowNamespaceNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
     {
-        if (now - _lastNamespaceNoticeUtc < TimeSpan.FromSeconds(15))
+        if (!_settings.ShowNamespaceNotices)
+        {
+            return;
+        }
+
+        if (now - _lastNamespaceNoticeUtc < TimeSpan.FromSeconds(_settings.NoticeCooldownSeconds))
         {
             return;
         }
@@ -176,7 +248,7 @@ internal sealed class ApprovalContext : ApplicationContext
 
     private void ShowUnmappableNotice(DeniedDeleteEventRecord record, DateTimeOffset now)
     {
-        if (now - _lastUnmappableNoticeUtc < TimeSpan.FromSeconds(15))
+        if (now - _lastUnmappableNoticeUtc < TimeSpan.FromSeconds(_settings.NoticeCooldownSeconds))
         {
             return;
         }
@@ -191,7 +263,12 @@ internal sealed class ApprovalContext : ApplicationContext
 
     private void ShowThrottleNotice(DateTimeOffset now)
     {
-        if (now - _lastThrottleNoticeUtc < TimeSpan.FromSeconds(15))
+        if (!_settings.ShowThrottleNotices)
+        {
+            return;
+        }
+
+        if (now - _lastThrottleNoticeUtc < TimeSpan.FromSeconds(_settings.NoticeCooldownSeconds))
         {
             return;
         }
@@ -231,43 +308,20 @@ internal sealed class ApprovalContext : ApplicationContext
         LaunchBroker(record.TargetPath);
     }
 
-    private static void LaunchBroker(string targetPath)
+    private async void LaunchBroker(string targetPath)
     {
-        var broker = Path.Combine(AppContext.BaseDirectory, "DeleteGuard.Broker.exe");
-        if (!File.Exists(broker))
+        var result = await _broker.DeleteAsync(targetPath);
+        if (result.Succeeded || result.Failure == BrokerFailure.Cancelled)
         {
-            MessageBox.Show(
-                $"DeleteGuard broker was not found:\n{broker}",
-                "DeleteGuard",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
             return;
         }
 
-        var startInfo = new ProcessStartInfo
+        var reason = result.Failure switch
         {
-            FileName = broker,
-            UseShellExecute = true,
-            Verb = "runas",
-            WorkingDirectory = Environment.CurrentDirectory
+            BrokerFailure.BrokerMissing => $"DeleteGuard broker was not found:\n{_broker.BrokerPath}",
+            _ => $"The approved deletion did not complete (exit code {result.ExitCode})." +
+                 (string.IsNullOrWhiteSpace(result.Detail) ? string.Empty : $"\n\n{result.Detail}")
         };
-        startInfo.ArgumentList.Add("delete");
-        startInfo.ArgumentList.Add(targetPath);
-
-        try
-        {
-            Process.Start(startInfo)?.Dispose();
-        }
-        catch (Win32Exception exception) when (exception.NativeErrorCode == 1223)
-        {
-        }
-        catch (Exception exception)
-        {
-            MessageBox.Show(
-                $"Unable to start the DeleteGuard broker.\n\n{exception.Message}",
-                "DeleteGuard",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-        }
+        MessageBox.Show(reason, "DeleteGuard", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 }
