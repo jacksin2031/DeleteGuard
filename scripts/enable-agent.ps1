@@ -11,12 +11,12 @@ if (-not (Test-Path $agent)) {
 
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 New-Item -Path $runKey -Force | Out-Null
-New-ItemProperty -Path $runKey -Name 'DeleteGuardAgent' -PropertyType String -Value "`"$agent`"" -Force | Out-Null
+New-ItemProperty -Path $runKey -Name 'DeleteGuardAgent' -PropertyType String -Value "`"$agent`" --background" -Force | Out-Null
 
 if (-not $NoStart) {
     $alreadyRunning = Get-Process -Name 'DeleteGuard.Agent' -ErrorAction SilentlyContinue
     if (-not $alreadyRunning) {
-        Start-Process -FilePath $agent
+        Start-Process -FilePath $agent -ArgumentList '--background'
     }
 }
 
